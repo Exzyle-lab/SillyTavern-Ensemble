@@ -2,6 +2,11 @@
 nul
 reference_materials/
 
+# Development documentation
+CLAUDE.md
+DEVELOPMENT_PLAN.md
+ST-API-REFERENCE.md
+
 # Testing infrastructure
 package.json
 package-lock.json
