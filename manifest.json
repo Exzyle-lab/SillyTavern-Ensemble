@@ -1,8 +1,11 @@
 {
   "display_name": "Ensemble",
+  "version": "1.0.0",
+  "description": "Parallel NPC generation with knowledge isolation via lorebook filtering",
   "author": "SillyTavern-Ensemble",
+  "homePage": "https://github.com/SillyTavern/SillyTavern-Ensemble",
   "js": "index.js",
   "css": "styles.css",
   "loading_order": 100,
-  "auto_update": false
+  "auto_update": true
 }

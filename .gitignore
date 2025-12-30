@@ -1,5 +1,7 @@
-.claude/settings.local.json
-nul
+# Claude Code
+.claude/
+
+# Reference materials (local only)
 reference_materials/
 
 # Development documentation
