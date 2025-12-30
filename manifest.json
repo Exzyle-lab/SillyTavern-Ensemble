@@ -1,0 +1,8 @@
+{
+  "display_name": "Ensemble",
+  "author": "SillyTavern-Ensemble",
+  "js": "index.js",
+  "css": "styles.css",
+  "loading_order": 100,
+  "auto_update": false
+}

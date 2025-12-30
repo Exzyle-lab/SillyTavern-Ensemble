@@ -1,0 +1,56 @@
+/**
+ * SillyTavern-Ensemble Extension Styles
+ *
+ * Follows SillyTavern theming conventions.
+ */
+
+/* Settings Panel */
+#ensemble_settings .ensemble_settings_block {
+    margin-bottom: 10px;
+}
+
+#ensemble_settings .ensemble_tier_settings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+#ensemble_settings .ensemble_tier_row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#ensemble_settings .ensemble_tier_row label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+#ensemble_settings .ensemble_tier_label {
+    font-weight: bold;
+}
+
+#ensemble_settings .ensemble_tier_row select {
+    width: 100%;
+}
+
+#ensemble_settings .notes {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+#ensemble_settings hr {
+    margin: 15px 0;
+    border: none;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+
+#ensemble_settings h4 {
+    margin-bottom: 5px;
+}
+
+#ensemble_refresh_profiles {
+    margin-top: 10px;
+}

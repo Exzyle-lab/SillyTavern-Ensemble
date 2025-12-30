@@ -1,0 +1,89 @@
+<div id="ensemble_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Ensemble</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="ensemble_settings_block">
+                <label class="checkbox_label" for="ensemble_enabled">
+                    <input type="checkbox" id="ensemble_enabled" data-setting="enabled">
+                    <span>Enable Ensemble</span>
+                </label>
+                <small class="notes">Enable parallel NPC generation via function calling</small>
+            </div>
+
+            <hr>
+
+            <h4 class="margin0">Tier Profiles</h4>
+            <small class="notes">Select which connection profile to use for each NPC tier. Leave empty to use the current active profile.</small>
+
+            <div class="ensemble_tier_settings">
+                <div class="ensemble_tier_row">
+                    <label for="ensemble_tier_orchestrator">
+                        <span class="ensemble_tier_label">Orchestrator</span>
+                        <small class="notes">GM/Narrator, narrative coherence</small>
+                    </label>
+                    <select id="ensemble_tier_orchestrator" class="text_pole" data-tier="orchestrator">
+                        <option value="">Use current profile</option>
+                    </select>
+                </div>
+
+                <div class="ensemble_tier_row">
+                    <label for="ensemble_tier_major">
+                        <span class="ensemble_tier_label">Major</span>
+                        <small class="notes">Key NPCs with complex backstories</small>
+                    </label>
+                    <select id="ensemble_tier_major" class="text_pole" data-tier="major">
+                        <option value="">Use current profile</option>
+                    </select>
+                </div>
+
+                <div class="ensemble_tier_row">
+                    <label for="ensemble_tier_standard">
+                        <span class="ensemble_tier_label">Standard</span>
+                        <small class="notes">Moderate complexity NPCs</small>
+                    </label>
+                    <select id="ensemble_tier_standard" class="text_pole" data-tier="standard">
+                        <option value="">Use current profile</option>
+                    </select>
+                </div>
+
+                <div class="ensemble_tier_row">
+                    <label for="ensemble_tier_minor">
+                        <span class="ensemble_tier_label">Minor</span>
+                        <small class="notes">Shopkeepers, thugs, one-offs</small>
+                    </label>
+                    <select id="ensemble_tier_minor" class="text_pole" data-tier="minor">
+                        <option value="">Use current profile</option>
+                    </select>
+                </div>
+
+                <div class="ensemble_tier_row">
+                    <label for="ensemble_tier_utility">
+                        <span class="ensemble_tier_label">Utility</span>
+                        <small class="notes">Judge, Archivist, Guardian agents</small>
+                    </label>
+                    <select id="ensemble_tier_utility" class="text_pole" data-tier="utility">
+                        <option value="">Use current profile</option>
+                    </select>
+                </div>
+            </div>
+
+            <hr>
+
+            <div class="ensemble_settings_block">
+                <label class="checkbox_label" for="ensemble_debug">
+                    <input type="checkbox" id="ensemble_debug" data-setting="debug">
+                    <span>Debug Logging</span>
+                </label>
+                <small class="notes">Enable verbose console logging for troubleshooting</small>
+            </div>
+
+            <div id="ensemble_refresh_profiles" class="menu_button menu_button_icon">
+                <i class="fa-solid fa-sync"></i>
+                <span>Refresh Profiles</span>
+            </div>
+        </div>
+    </div>
+</div>

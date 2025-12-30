@@ -388,12 +388,32 @@ Implement a lock to prevent conflicts while parallel generation runs:
 
 ## Development Phases
 
-| Phase | Scope | Deliverable |
-|-------|-------|-------------|
-| 1 | Core plumbing | Extension scaffold, router, single tool (`spawn_npc_responses`), `Promise.all()` working |
-| 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards |
-| 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking |
-| 4 | Integration | Settings UI, debug logging, documentation |
+| Phase | Scope | Deliverable | Status |
+|-------|-------|-------------|--------|
+| 1 | Core plumbing | Extension scaffold, router, single tool (`spawn_npc_responses`), `Promise.allSettled()` working | **Complete** |
+| 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards | Pending |
+| 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking | Pending |
+| 4 | Integration | Slash command, debug logging, documentation | Pending |
+
+### Phase 1 Implementation Notes
+
+**Completed 2024-12-30**
+
+Files created:
+- `index.js` - Entry point, APP_READY hook, settings UI wiring, tool registration
+- `src/logger.js` - `generateCorrelationId()`, structured `logger` object
+- `src/settings.js` - `getSettings()`, `saveSettings()`, `getAvailableProfiles()`
+- `src/router.js` - `inferTier()`, `getProfileForTier()`, `directGenerate()`
+- `src/orchestrator.js` - `spawnNPCResponses()`, `findCharacterByName()`, `buildNPCPrompt()`
+- `src/tools.js` - `registerTools()`, `spawn_npc_responses` tool definition
+- `settings.html` - Tier dropdown UI injected into `#extensions_settings2`
+
+Key implementation details:
+- Extension folder path: `scripts/extensions/third-party/SillyTavern-Ensemble`
+- Settings stored in `extensionSettings.ensemble` namespace
+- Tools register/unregister dynamically based on enabled state
+- Tier dropdowns populate from `connectionManager.profiles[]`
+- Phase 1 uses minimal prompts; Phase 2 adds full lorebook context
 
 ## Open Questions
 
@@ -463,10 +483,15 @@ For computer-use scenarios (if needed later), Claude Haiku 4.5 has unmatched 50.
 When starting work:
 1. This file (CLAUDE.md)
 2. `ST-API-REFERENCE.md` for SillyTavern API documentation
-3. `manifest.json` for extension metadata
-4. `src/router.js` for backend selection logic
-5. `src/context.js` for prompt building
-6. `src/tools.js` for function tool implementations
+3. `DEVELOPMENT_PLAN.md` for detailed implementation steps
+
+Implementation files (Phase 1 complete):
+- `index.js` — Entry point, settings UI, tool registration
+- `src/router.js` — Tier inference, profile lookup, `directGenerate()`
+- `src/orchestrator.js` — Parallel spawning, `spawnNPCResponses()`
+- `src/tools.js` — Function tool definitions
+- `src/settings.js` — Settings management
+- `src/context.js` — *(Phase 2)* Lorebook filtering, prompt building
 
 ### SillyTavern Source Reference
 
