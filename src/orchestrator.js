@@ -12,6 +12,7 @@
 
 import { logger, generateCorrelationId } from './logger.js';
 import { inferTier, getProfileForTier, directGenerate } from './router.js';
+import { buildNPCPromptWithContext } from './context.js';
 
 /**
  * Find a character's index by name (case-insensitive).
@@ -37,54 +38,6 @@ export function findCharacterByName(name) {
 }
 
 /**
- * Build a minimal prompt for an NPC response.
- *
- * Phase 1 implementation - uses basic character info.
- * Phase 2 will add lorebook context and knowledge hardening.
- *
- * @param {Object} character - The character object from SillyTavern
- * @param {string} situation - Description of what happened
- * @param {string} format - Response format: 'dialogue', 'action', or 'full'
- * @returns {Array<{role: string, content: string}>} Messages array for API call
- */
-export function buildNPCPrompt(character, situation, format) {
-    // Build character context from available fields
-    const personality = character.personality || '';
-    const description = character.description || '';
-    const characterContext = personality || description || 'No character information available.';
-
-    // System prompt establishes the NPC identity
-    const systemPrompt = `You are ${character.name}. ${characterContext}
-
-Stay in character. Respond naturally based on your personality and the situation presented.`;
-
-    // Format instructions
-    let formatInstruction = '';
-    switch (format) {
-        case 'dialogue':
-            formatInstruction = 'Respond with dialogue only. No action descriptions or narration.';
-            break;
-        case 'action':
-            formatInstruction = 'Respond with actions only. Describe what you do, no spoken dialogue.';
-            break;
-        case 'full':
-        default:
-            formatInstruction = 'Respond with both dialogue and actions as appropriate.';
-            break;
-    }
-
-    // User prompt presents the situation
-    const userPrompt = `React to the following situation. ${formatInstruction}
-
-${situation}`;
-
-    return [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-    ];
-}
-
-/**
  * Execute a single NPC generation request.
  *
  * @param {string} npcName - The NPC name
@@ -95,8 +48,6 @@ ${situation}`;
  * @returns {Promise<Object>} Result object with response or error
  */
 async function executeNPCRequest(npcName, characterId, situation, format, correlationId) {
-    const context = SillyTavern.getContext();
-    const character = context.characters[characterId];
     const startTime = Date.now();
 
     try {
@@ -111,8 +62,8 @@ async function executeNPCRequest(npcName, characterId, situation, format, correl
             profile: profile?.name || 'current',
         }, correlationId);
 
-        // Build prompt for this NPC
-        const messages = buildNPCPrompt(character, situation, format);
+        // Build prompt for this NPC with full lorebook context (Phase 2)
+        const messages = await buildNPCPromptWithContext(characterId, situation, format);
 
         // Make the API call
         const result = await directGenerate(messages, profile, {

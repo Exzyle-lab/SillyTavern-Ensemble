@@ -391,7 +391,7 @@ Implement a lock to prevent conflicts while parallel generation runs:
 | Phase | Scope | Deliverable | Status |
 |-------|-------|-------------|--------|
 | 1 | Core plumbing | Extension scaffold, router, single tool (`spawn_npc_responses`), `Promise.allSettled()` working | **Complete** |
-| 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards | Pending |
+| 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards | **Complete** |
 | 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking | Pending |
 | 4 | Integration | Slash command, debug logging, documentation | Pending |
 
@@ -404,7 +404,8 @@ Files created:
 - `src/logger.js` - `generateCorrelationId()`, structured `logger` object
 - `src/settings.js` - `getSettings()`, `saveSettings()`, `getAvailableProfiles()`
 - `src/router.js` - `inferTier()`, `getProfileForTier()`, `directGenerate()`
-- `src/orchestrator.js` - `spawnNPCResponses()`, `findCharacterByName()`, `buildNPCPrompt()`
+- `src/orchestrator.js` - `spawnNPCResponses()`, `findCharacterByName()`, `executeNPCRequest()`
+- `src/context.js` - `buildNPCContext()`, `filterEntriesForNPC()`, knowledge hardening
 - `src/tools.js` - `registerTools()`, `spawn_npc_responses` tool definition
 - `settings.html` - Tier dropdown UI injected into `#extensions_settings2`
 
@@ -415,30 +416,37 @@ Key implementation details:
 - Tier dropdowns populate from `connectionManager.profiles[]`
 - Phase 1 uses minimal prompts; Phase 2 adds full lorebook context
 
-**Unit Testing (Phase 1 verification):**
-- 174 tests across 5 files: logger (23), router (38), orchestrator (46), settings (35), tools (32)
+**Unit Testing:**
+- 258 tests across 6 files: logger (23), router (38), orchestrator (40), settings (35), tools (32), context (90)
 - Test infrastructure gitignored (package.json, tests/, node_modules/, coverage/)
 - Run with `npm test` (requires `npm install` first)
 
-### Phase 2 Planning Notes
+### Phase 2 Implementation Notes
 
-**Status:** Planned, ready for implementation
+**Completed 2024-12-30**
 
-**Files to create:**
-- `src/context.js` (~400 LOC) - Lorebook filtering, knowledge hardening, context builder
-- `src/templates/npc.md` - NPC prompt template with placeholders
+Files created:
+- `src/context.js` (609 LOC) - Lorebook filtering, knowledge hardening, context builder
+- `src/templates/npc.md` - NPC prompt template with Handlebars-style placeholders
 
-**Files to modify:**
-- `src/orchestrator.js` - Replace `buildNPCPrompt()` with `buildNPCContext()` + `buildNPCMessages()`
+Files modified:
+- `src/orchestrator.js` - Now uses `buildNPCPromptWithContext()` from context.js
 
 **Key functions in context.js:**
 - `getAllLorebookEntries()` - Access ST lorebook via `window.getSortedEntries()`
-- `filterEntriesForNPC(entries, npcFilename)` - Knowledge hardening filter
-- `getSceneState()` - Read `ensemble_scene_state` lorebook entry
+- `filterEntriesForNPC(entries, npcFilename, npcName)` - Knowledge hardening filter
+- `getSceneState(entries)` - Read `ensemble_scene_state` lorebook entry
 - `buildNPCContext(characterId, situation)` - Combine character + filtered lorebook + scene
 - `buildNPCMessages(context, format)` - Format for API call
+- `buildNPCPromptWithContext(characterId, situation, format)` - Convenience wrapper
 
-**Plan file:** `C:\Users\jorda\.claude\plans\spicy-puzzling-allen.md`
+**Knowledge Hardening Logic:**
+```javascript
+// No filter = common knowledge (visible to all)
+// isExclude=false + names = include ONLY these characters
+// isExclude=true + names = exclude these characters (visible to everyone else)
+// Tag-only filters = excluded for safety (Phase 3)
+```
 
 ## Open Questions
 
