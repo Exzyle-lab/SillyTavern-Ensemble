@@ -168,3 +168,12 @@ export function clearAllRateLimits() {
 export function _getStateForTesting() {
     return rateLimitState;
 }
+
+/**
+ * Gets the current rate limit state for status display.
+ * Alias for _getStateForTesting() for public API.
+ * @returns {Map<string, {isLimited: boolean, nextAttemptTime: number, consecutiveErrors: number}>}
+ */
+export function getRateLimitState() {
+    return rateLimitState;
+}

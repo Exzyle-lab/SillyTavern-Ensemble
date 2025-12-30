@@ -393,7 +393,7 @@ Implement a lock to prevent conflicts while parallel generation runs:
 | 1 | Core plumbing | Extension scaffold, router, single tool (`spawn_npc_responses`), `Promise.allSettled()` working | **Complete** |
 | 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards | **Complete** |
 | 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking | **Complete** |
-| 4 | Integration | Fallback chains, kill switch, tier debugger, slash commands, docs | **Planning Complete** |
+| 4 | Integration | Fallback chains, kill switch, tier debugger, slash commands, docs | **Complete** |
 
 ### Phase 1 Implementation Notes
 
@@ -548,7 +548,8 @@ Key features:
 
 ### Phase 4.2: Kill Switch & Slash Commands
 
-**Status:** In Progress (2024-12-30)
+**Completed 2024-12-30**
+**470 tests passing**
 **Peer Review:** Gemini 2.5 Flash consensus reached
 
 **Gemini Consensus Items:**
@@ -579,16 +580,48 @@ spawnNPCResponses() → executeNPCRequest(signal) → directGenerate(signal) →
 abortCurrentSpawn() → controller.abort() → fetch throws AbortError → Promise.allSettled catches
 ```
 
-### Phase 4.3: Tier Debugger UI (Planned)
+Files created:
+- `src/commands.js` - Slash command handlers with `/ensemble spawn|status|clear|stop`
 
-- Drawer panel (not modal) for side-by-side comparison
-- Lists all characters with inferred/override tiers
-- Session overrides (Map) vs permanent card writes
-- Uses ST's `writeExtensionField()` for permanent saves
+Files modified:
+- `src/orchestrator.js` - Added `currentAbortController`, `abortCurrentSpawn()`, AbortError filtering
+- `src/router.js` - Added `signal` propagation to fetch
+- `src/rate-limiter.js` - Added `getRateLimitState()` for status command
+- `index.js` - Register slash commands on APP_READY
 
-### Phase 4.4: Documentation (Planned)
+### Phase 4.3: Tier Debugger UI
 
-README.md sections: Installation, Quick Start, Tier Configuration, Function Tools, Slash Commands, Knowledge Hardening, Troubleshooting
+**Completed 2024-12-30**
+**483 tests passing**
+
+Files created:
+- `src/tier-debugger.js` - Drawer UI with character list, tier dropdowns, source badges
+
+Files modified:
+- `src/router.js` - Added `sessionTierOverrides` Map, `setSessionTierOverride()`, `clearSessionTierOverride()`, `getSessionTierOverrides()`, `clearAllSessionTierOverrides()`
+- `settings.html` - Added "Inspect Tiers" button
+- `styles.css` - Drawer styling, source badges (inferred/session/card)
+- `index.js` - Wire up button click handler
+
+Features:
+- Drawer panel slides in from right (side-by-side with ST UI)
+- Character list with avatar, name, tier dropdown, source badge
+- Session overrides (orange badge) - temporary, lost on refresh
+- Card saves (green badge) - permanent via `writeExtensionField()`
+- ESC key to close drawer
+
+### Phase 4.4: Documentation
+
+**Completed 2024-12-30**
+
+Created `README.md` with sections:
+- Installation instructions
+- Quick Start guide
+- Tier Configuration (fallback chains, dynamic inference, debugger)
+- Function Tools reference (spawn_npc_responses, query_npc_knowledge, resolve_action, audit_narrative)
+- Slash Commands reference (/ensemble spawn/status/clear/stop)
+- Knowledge Hardening (lorebook setup with characterFilter)
+- Troubleshooting (rate limits, local models, aborted generation)
 
 ## Open Questions
 

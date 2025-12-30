@@ -5,19 +5,77 @@
  * - Dynamic tier inference based on character complexity
  * - Connection profile lookup and selection
  * - Direct API calls bypassing ST's sequential queue
+ * - Session tier overrides for Tier Debugger UI
  *
  * @module router
  */
 
 import { checkRateLimit, recordSuccess, recordRateLimit } from './rate-limiter.js';
+import { logger } from './logger.js';
 
 const MODULE_NAME = 'Ensemble';
+
+/**
+ * Session-only tier overrides. Lost on page refresh.
+ * Key: characterId (number), Value: tier (string)
+ * @type {Map<number, string>}
+ */
+const sessionTierOverrides = new Map();
 
 /**
  * Valid tier values for NPC categorization
  * @type {readonly string[]}
  */
 export const TIERS = Object.freeze(['orchestrator', 'major', 'standard', 'minor', 'utility']);
+
+/**
+ * Set a session-only tier override for a character.
+ * This override is temporary and will be lost on page refresh.
+ *
+ * @param {number} characterId - Index into the characters array
+ * @param {string} tier - The tier to assign
+ * @returns {boolean} True if the override was set successfully
+ */
+export function setSessionTierOverride(characterId, tier) {
+    if (!TIERS.includes(tier)) {
+        logger.warn({ event: 'invalid_session_tier_override', characterId, tier });
+        return false;
+    }
+    sessionTierOverrides.set(characterId, tier);
+    logger.info({ event: 'session_tier_override_set', characterId, tier });
+    return true;
+}
+
+/**
+ * Clear a session tier override for a specific character.
+ *
+ * @param {number} characterId - Index into the characters array
+ * @returns {boolean} True if an override was removed
+ */
+export function clearSessionTierOverride(characterId) {
+    const deleted = sessionTierOverrides.delete(characterId);
+    if (deleted) {
+        logger.info({ event: 'session_tier_override_cleared', characterId });
+    }
+    return deleted;
+}
+
+/**
+ * Clear all session tier overrides.
+ */
+export function clearAllSessionTierOverrides() {
+    sessionTierOverrides.clear();
+    logger.info({ event: 'all_session_tier_overrides_cleared' });
+}
+
+/**
+ * Get a copy of all current session tier overrides.
+ *
+ * @returns {Map<number, string>} Copy of the session overrides map
+ */
+export function getSessionTierOverrides() {
+    return new Map(sessionTierOverrides);
+}
 
 /**
  * Default tier-to-profile mapping (empty array = use current profile)
@@ -125,6 +183,11 @@ function getMessageCountForCharacter(characterId) {
 /**
  * Infer the appropriate tier for a character based on complexity signals.
  *
+ * Priority order:
+ * 1. Session override (temporary, from Tier Debugger UI)
+ * 2. Card extension data (permanent, saved to character)
+ * 3. Dynamic inference from complexity signals
+ *
  * Complexity is calculated from:
  * - Lorebook entries filtered to this character (weight: 2x)
  * - Message count in current chat history
@@ -134,6 +197,13 @@ function getMessageCountForCharacter(characterId) {
  * @returns {Promise<string>} The inferred tier: 'major', 'standard', or 'minor'
  */
 export async function inferTier(characterId) {
+    // 1. Check session overrides first (temporary, from Tier Debugger)
+    if (sessionTierOverrides.has(characterId)) {
+        const tier = sessionTierOverrides.get(characterId);
+        logger.debug({ event: 'using_session_tier_override', characterId, tier });
+        return tier;
+    }
+
     const context = SillyTavern.getContext();
     const character = context.characters[characterId];
 
@@ -142,10 +212,10 @@ export async function inferTier(characterId) {
         return 'minor';
     }
 
-    // Check for explicit override in character extension data
+    // 2. Check for explicit override in character extension data (permanent)
     const tierOverride = character.data?.extensions?.ensemble?.tier;
     if (tierOverride && TIERS.includes(tierOverride)) {
-        console.debug(`[${MODULE_NAME}] Using explicit tier override for ${character.name}: ${tierOverride}`);
+        console.debug(`[${MODULE_NAME}] Using card tier override for ${character.name}: ${tierOverride}`);
         return tierOverride;
     }
 
@@ -376,6 +446,7 @@ function getChatCompletionSource(profile) {
  * @param {Array<{role: string, content: string}>} messages - Chat messages array
  * @param {Object|null} profile - Connection profile to use, or null for current settings
  * @param {Object} options - Generation options
+ * @param {AbortSignal} [options.signal] - Optional AbortSignal for cancellation
  * @returns {Promise<Object>} The API response with generated content
  * @throws {Error} Error with isRateLimited flag set for 429 errors
  */
@@ -386,6 +457,7 @@ async function singleProfileGenerate(messages, profile, options) {
         max_tokens = 500,
         npcId = 'unknown',
         tier = 'unknown',
+        signal,
     } = options;
 
     const profileName = profile?.name || 'default';
@@ -431,6 +503,7 @@ async function singleProfileGenerate(messages, profile, options) {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(generateData),
+        signal: signal,
     });
 
     if (!response.ok) {
@@ -491,6 +564,7 @@ async function singleProfileGenerate(messages, profile, options) {
  * @param {string} [options.npcId] - NPC identifier for error messages
  * @param {string} [options.tier] - Tier for fallback chain lookup and error messages
  * @param {boolean} [options.useFallback=true] - Whether to use fallback chain on rate limit
+ * @param {AbortSignal} [options.signal] - Optional AbortSignal for cancellation
  * @returns {Promise<Object>} The API response with generated content
  * @throws {Error} Descriptive error with profile name and status code on failure
  */

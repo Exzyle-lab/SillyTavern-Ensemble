@@ -15,6 +15,14 @@ import { inferTier, getProfileForTier, directGenerate } from './router.js';
 import { buildNPCPromptWithContext, buildNPCContext } from './context.js';
 
 /**
+ * Module-level AbortController for cancelling pending NPC generation requests.
+ * Only one spawn operation can be active at a time - starting a new spawn
+ * will automatically abort any previous pending spawn.
+ * @type {AbortController|null}
+ */
+let currentAbortController = null;
+
+/**
  * Find a character's index by name (case-insensitive).
  *
  * @param {string} name - The character name to search for
@@ -45,9 +53,10 @@ export function findCharacterByName(name) {
  * @param {string} situation - The situation to react to
  * @param {string} format - Response format
  * @param {string} correlationId - Correlation ID for logging
+ * @param {AbortSignal} [signal] - Optional AbortSignal for cancellation
  * @returns {Promise<Object>} Result object with response or error
  */
-async function executeNPCRequest(npcName, characterId, situation, format, correlationId) {
+async function executeNPCRequest(npcName, characterId, situation, format, correlationId, signal) {
     const startTime = Date.now();
 
     try {
@@ -71,6 +80,7 @@ async function executeNPCRequest(npcName, characterId, situation, format, correl
             tier: tier,
             max_tokens: 500,
             temperature: 0.8,
+            signal: signal,
         });
 
         const latency = Date.now() - startTime;
@@ -105,19 +115,27 @@ async function executeNPCRequest(npcName, characterId, situation, format, correl
 
     } catch (error) {
         const latency = Date.now() - startTime;
+        const isAborted = error.name === 'AbortError';
 
-        logger.error({
-            event: 'request_failed',
-            npc: npcName,
-            error: error.message,
-            latency: latency,
-        }, correlationId);
+        if (isAborted) {
+            logger.debug({
+                event: 'request_aborted',
+                npc: npcName,
+            }, correlationId);
+        } else {
+            logger.error({
+                event: 'request_failed',
+                npc: npcName,
+                error: error.message,
+                latency: latency,
+            }, correlationId);
+        }
 
         return {
             npc: npcName,
             success: false,
             response: null,
-            error: error.message,
+            error: isAborted ? 'Aborted' : error.message,
             latency: latency,
             tier: null,
         };
@@ -149,11 +167,20 @@ export function aggregateResults(results, npcs, correlationId) {
         }
     });
 
-    // Calculate statistics
-    const successCount = processed.filter(r => r.success).length;
-    const failCount = processed.filter(r => !r.success).length;
-    const totalLatency = processed.reduce((sum, r) => sum + (r.latency || 0), 0);
-    const avgLatency = processed.length > 0 ? Math.round(totalLatency / processed.length) : 0;
+    // Filter out aborted requests (user intentionally stopped)
+    // Aborted requests should not count as failures since user cancelled them
+    const nonAborted = processed.filter(r => {
+        if (!r.success && r.error === 'Aborted') {
+            return false; // Don't count as failure
+        }
+        return true;
+    });
+
+    // Calculate statistics (only for non-aborted requests)
+    const successCount = nonAborted.filter(r => r.success).length;
+    const failCount = nonAborted.filter(r => !r.success).length;
+    const totalLatency = nonAborted.reduce((sum, r) => sum + (r.latency || 0), 0);
+    const avgLatency = nonAborted.length > 0 ? Math.round(totalLatency / nonAborted.length) : 0;
 
     logger.info({
         event: 'spawn_complete',
@@ -162,10 +189,10 @@ export function aggregateResults(results, npcs, correlationId) {
         avgLatency: avgLatency,
     }, correlationId);
 
-    // Build formatted markdown output for GM
+    // Build formatted markdown output for GM (include non-aborted results only)
     let markdown = '## NPC Responses\n\n';
 
-    for (const result of processed) {
+    for (const result of nonAborted) {
         markdown += `### ${result.npc}\n`;
 
         if (result.success) {
@@ -176,10 +203,10 @@ export function aggregateResults(results, npcs, correlationId) {
     }
 
     return {
-        results: processed,
+        results: processed, // Include all results for debugging/transparency
         markdown: markdown.trim(),
         stats: {
-            total: processed.length,
+            total: nonAborted.length,
             success: successCount,
             failed: failCount,
             avgLatency: avgLatency,
@@ -205,6 +232,14 @@ export function aggregateResults(results, npcs, correlationId) {
  */
 export async function spawnNPCResponses({ npcs, situation, format = 'full' }) {
     const correlationId = generateCorrelationId();
+
+    // Auto-abort any existing spawn (prevents race condition from double-clicks)
+    if (currentAbortController) {
+        currentAbortController.abort();
+        logger.info({ event: 'previous_spawn_aborted' }, correlationId);
+    }
+    currentAbortController = new AbortController();
+    const signal = currentAbortController.signal;
 
     logger.info({
         event: 'spawn_start',
@@ -263,7 +298,7 @@ export async function spawnNPCResponses({ npcs, situation, format = 'full' }) {
         }
 
         // Execute the NPC request
-        return executeNPCRequest(npcName, characterId, situation, format, correlationId);
+        return executeNPCRequest(npcName, characterId, situation, format, correlationId, signal);
     });
 
     // Execute all requests in parallel
@@ -576,4 +611,20 @@ Audit this narrative for compliance with the verdict.`;
             correlationId
         };
     }
+}
+
+/**
+ * Abort the current spawn operation if one is in progress.
+ * This allows users to cancel pending NPC generation requests.
+ *
+ * @returns {boolean} True if an active spawn was aborted, false if none was active
+ */
+export function abortCurrentSpawn() {
+    if (currentAbortController) {
+        currentAbortController.abort();
+        logger.info({ event: 'spawn_aborted_by_user' });
+        currentAbortController = null;
+        return true;
+    }
+    return false;
 }

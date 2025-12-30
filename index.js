@@ -8,6 +8,8 @@
 import { logger, generateCorrelationId } from './src/logger.js';
 import { registerTools, unregisterTools } from './src/tools.js';
 import { validateUI } from './src/ui-lock.js';
+import { registerSlashCommands } from './src/commands.js';
+import { openTierDebugger } from './src/tier-debugger.js';
 import {
     getSettings,
     initSettings,
@@ -375,6 +377,11 @@ function bindSettingsEventHandlers() {
         logger.info('Connection profiles refreshed');
     });
 
+    // Inspect Tiers button - opens the Tier Debugger drawer
+    $('#ensemble_inspect_tiers').on('click', function () {
+        openTierDebugger();
+    });
+
     logger.debug({ event: 'event_handlers_bound' });
 }
 
@@ -423,6 +430,9 @@ async function onAppReady() {
         if (settings.enabled) {
             registerTools();
         }
+
+        // Register slash commands (Phase 4)
+        registerSlashCommands();
 
         logger.info('[Ensemble] Loaded successfully', correlationId);
         logger.debug({
