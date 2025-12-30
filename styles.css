@@ -32,10 +32,6 @@
     font-weight: bold;
 }
 
-#ensemble_settings .ensemble_tier_row select {
-    width: 100%;
-}
-
 #ensemble_settings .notes {
     opacity: 0.7;
     font-size: 0.9em;
@@ -53,4 +49,156 @@
 
 #ensemble_refresh_profiles {
     margin-top: 10px;
+}
+
+/* Fallback Chain Container */
+#ensemble_settings .ensemble_fallback_chain {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    background: var(--SmartThemeBlurTintColor);
+}
+
+/* Profile List (sortable container) */
+#ensemble_settings .ensemble_profile_list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 8px;
+}
+
+#ensemble_settings .ensemble_profile_list:empty {
+    display: none;
+}
+
+/* Profile Tag/Chip */
+#ensemble_settings .ensemble_profile_tag {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--SmartThemeBodyColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    cursor: grab;
+    user-select: none;
+    transition: background-color 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+#ensemble_settings .ensemble_profile_tag:hover {
+    background: var(--SmartThemeQuoteColor);
+    border-color: var(--SmartThemeEmColor);
+}
+
+#ensemble_settings .ensemble_profile_tag:active {
+    cursor: grabbing;
+}
+
+#ensemble_settings .ensemble_profile_tag.dragging {
+    opacity: 0.5;
+    transform: scale(0.98);
+}
+
+#ensemble_settings .ensemble_profile_tag.drag-over {
+    border-color: var(--SmartThemeEmColor);
+    background: var(--SmartThemeQuoteColor);
+}
+
+/* Profile Order Number */
+#ensemble_settings .ensemble_profile_order {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 4px;
+    font-size: 0.75em;
+    font-weight: bold;
+    background: var(--SmartThemeEmColor);
+    color: var(--SmartThemeBodyColor);
+    border-radius: 10px;
+}
+
+/* First profile (primary) gets special styling */
+#ensemble_settings .ensemble_profile_tag:first-child .ensemble_profile_order {
+    background: var(--SmartThemeChatMesColorName);
+}
+
+/* Drag Handle */
+#ensemble_settings .ensemble_drag_handle {
+    opacity: 0.5;
+    cursor: grab;
+    font-size: 0.9em;
+}
+
+#ensemble_settings .ensemble_drag_handle:hover {
+    opacity: 1;
+}
+
+/* Profile Name */
+#ensemble_settings .ensemble_profile_name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Remove Button */
+#ensemble_settings .ensemble_profile_remove {
+    opacity: 0.5;
+    cursor: pointer;
+    padding: 2px;
+    font-size: 0.9em;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+#ensemble_settings .ensemble_profile_remove:hover {
+    opacity: 1;
+    color: var(--SmartThemeWarningColor, #ff6b6b);
+}
+
+/* Add Profile Section */
+#ensemble_settings .ensemble_add_profile {
+    display: flex;
+    gap: 8px;
+}
+
+#ensemble_settings .ensemble_profile_select {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Chain Hint (shown when empty) */
+#ensemble_settings .ensemble_chain_hint {
+    display: none;
+    margin-top: 4px;
+    font-style: italic;
+}
+
+#ensemble_settings .ensemble_tier_row.chain-empty .ensemble_chain_hint {
+    display: block;
+}
+
+/* Drop zone indicator during drag */
+#ensemble_settings .ensemble_profile_list.drag-active {
+    background: var(--SmartThemeQuoteColor);
+    border-radius: 4px;
+    min-height: 40px;
+}
+
+#ensemble_settings .ensemble_profile_list.drag-active::before {
+    content: 'Drop here';
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    opacity: 0.5;
+    font-size: 0.85em;
+}
+
+#ensemble_settings .ensemble_profile_list:not(:empty).drag-active::before {
+    display: none;
 }

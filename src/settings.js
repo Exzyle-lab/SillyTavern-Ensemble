@@ -10,21 +10,39 @@ const EXTENSION_NAME = 'ensemble';
 
 /**
  * Default settings for the Ensemble extension
+ * Note: tierProfiles values are arrays (fallback chains) as of Phase 4
  */
 export const DEFAULT_SETTINGS = {
     enabled: true,
     tierProfiles: {
-        orchestrator: '',
-        major: '',
-        standard: '',
-        minor: '',
-        utility: ''
+        orchestrator: [],
+        major: [],
+        standard: [],
+        minor: [],
+        utility: []
     },
     debug: false
 };
 
 /**
+ * Normalizes a tier profile value to array format
+ * Handles backwards compatibility with old single-string format
+ * @param {string|string[]} value - Profile value (string or array)
+ * @returns {string[]} Array of profile names
+ */
+function normalizeTierProfile(value) {
+    if (Array.isArray(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value !== '') {
+        return [value];
+    }
+    return [];
+}
+
+/**
  * Gets the current extension settings, merged with defaults
+ * Ensures tierProfiles values are always arrays (fallback chains)
  * @returns {Object} Current settings object with all default values filled in
  */
 export function getSettings() {
@@ -32,13 +50,22 @@ export function getSettings() {
     const stored = context.extensionSettings[EXTENSION_NAME] || {};
 
     // Deep merge with defaults
+    const storedTierProfiles = stored.tierProfiles || {};
+    const normalizedTierProfiles = {};
+
+    // Normalize each tier profile to array format
+    for (const tier of Object.keys(DEFAULT_SETTINGS.tierProfiles)) {
+        normalizedTierProfiles[tier] = normalizeTierProfile(
+            storedTierProfiles[tier] !== undefined
+                ? storedTierProfiles[tier]
+                : DEFAULT_SETTINGS.tierProfiles[tier]
+        );
+    }
+
     const settings = {
         ...DEFAULT_SETTINGS,
         ...stored,
-        tierProfiles: {
-            ...DEFAULT_SETTINGS.tierProfiles,
-            ...(stored.tierProfiles || {})
-        }
+        tierProfiles: normalizedTierProfiles
     };
 
     return settings;
@@ -58,6 +85,7 @@ export function saveSettings(settings) {
 /**
  * Initializes settings on first load if not present
  * Creates default settings structure if none exists
+ * Migrates old single-string tierProfiles to array format
  */
 export function initSettings() {
     const context = SillyTavern.getContext();
@@ -78,22 +106,33 @@ export function initSettings() {
             }
         }
 
-        // Ensure all tier profile keys exist
+        // Ensure all tier profile keys exist and migrate to array format
         if (!current.tierProfiles) {
             current.tierProfiles = structuredClone(DEFAULT_SETTINGS.tierProfiles);
             updated = true;
         } else {
             for (const tier of Object.keys(DEFAULT_SETTINGS.tierProfiles)) {
                 if (current.tierProfiles[tier] === undefined) {
-                    current.tierProfiles[tier] = DEFAULT_SETTINGS.tierProfiles[tier];
+                    current.tierProfiles[tier] = structuredClone(DEFAULT_SETTINGS.tierProfiles[tier]);
                     updated = true;
+                } else if (!Array.isArray(current.tierProfiles[tier])) {
+                    // Migration: convert old single-string format to array
+                    const oldValue = current.tierProfiles[tier];
+                    current.tierProfiles[tier] = normalizeTierProfile(oldValue);
+                    updated = true;
+                    logger.info({
+                        event: 'tier_profile_migrated',
+                        tier,
+                        from: oldValue,
+                        to: current.tierProfiles[tier]
+                    });
                 }
             }
         }
 
         if (updated) {
             context.saveSettingsDebounced();
-            logger.info('Updated settings with missing default values');
+            logger.info('Updated settings with missing default values or migrated formats');
         }
     }
 }
@@ -126,25 +165,60 @@ export function getAvailableProfiles() {
 }
 
 /**
- * Gets a specific tier's configured profile name
+ * Gets a specific tier's configured profile fallback chain
  * @param {string} tier - Tier name (orchestrator, major, standard, minor, utility)
- * @returns {string} Profile name for the tier, or empty string if using current profile
+ * @returns {string[]} Array of profile names for the tier (fallback chain), empty if using current profile
  */
-export function getTierProfile(tier) {
+export function getTierProfileChain(tier) {
     const settings = getSettings();
-    return settings.tierProfiles[tier] || '';
+    return settings.tierProfiles[tier] || [];
 }
 
 /**
- * Sets a specific tier's profile configuration
+ * Gets a specific tier's primary (first) profile name
+ * Backwards compatible with code expecting a single profile string
+ * @param {string} tier - Tier name (orchestrator, major, standard, minor, utility)
+ * @returns {string} Primary profile name for the tier, or empty string if using current profile
+ */
+export function getTierProfile(tier) {
+    const chain = getTierProfileChain(tier);
+    return chain.length > 0 ? chain[0] : '';
+}
+
+/**
+ * Sets a specific tier's profile configuration as a single-item fallback chain
+ * Backwards compatible - wraps single profile in array
  * @param {string} tier - Tier name (orchestrator, major, standard, minor, utility)
  * @param {string} profileName - Profile name to use, or empty string for current profile
  */
 export function setTierProfile(tier, profileName) {
+    const chain = profileName ? [profileName] : [];
+    setTierProfileChain(tier, chain);
+}
+
+/**
+ * Sets a specific tier's full profile fallback chain
+ * @param {string} tier - Tier name (orchestrator, major, standard, minor, utility)
+ * @param {string[]} profileNames - Array of profile names in fallback order (first = primary)
+ */
+export function setTierProfileChain(tier, profileNames) {
+    if (!Array.isArray(profileNames)) {
+        throw new Error(`setTierProfileChain expects an array, got ${typeof profileNames}`);
+    }
+
     const settings = getSettings();
-    settings.tierProfiles[tier] = profileName;
+    // Filter out empty strings and ensure all entries are strings
+    settings.tierProfiles[tier] = profileNames
+        .filter(name => typeof name === 'string' && name !== '');
+
     saveSettings(settings);
-    logger.debug({ event: 'tier_profile_set', tier, profile: profileName || '(current)' });
+    logger.debug({
+        event: 'tier_profile_chain_set',
+        tier,
+        profiles: settings.tierProfiles[tier].length > 0
+            ? settings.tierProfiles[tier]
+            : '(current)'
+    });
 }
 
 /**

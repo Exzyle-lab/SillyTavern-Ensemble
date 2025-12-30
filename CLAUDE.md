@@ -393,7 +393,7 @@ Implement a lock to prevent conflicts while parallel generation runs:
 | 1 | Core plumbing | Extension scaffold, router, single tool (`spawn_npc_responses`), `Promise.allSettled()` working | **Complete** |
 | 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards | **Complete** |
 | 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking | **Complete** |
-| 4 | Integration | Slash command, debug logging, documentation | Pending |
+| 4 | Integration | Fallback chains, kill switch, tier debugger, slash commands, docs | **Planning Complete** |
 
 ### Phase 1 Implementation Notes
 
@@ -514,6 +514,7 @@ Gemini 3 Pro Preview conducted a peer review of Phase 3 implementation. After pu
    - Removed `'` → `"` replacement from `lenientJSONParse()`
    - Risk: Natural language apostrophes (e.g., "don't") would corrupt JSON
    - Kept only trailing comma cleanup which is safe
+   - Tests updated: 2 tests in context.test.js now expect defaults for single-quote JSON
 
 3. **UI Validation** (`src/ui-lock.js`)
    - Added `validateUI()` export to check selectors exist at startup
@@ -526,6 +527,68 @@ Gemini 3 Pro Preview conducted a peer review of Phase 3 implementation. After pu
 
 **Deferred to Phase 4:**
 - One-shot JSON examples for Judge/Guardian prompts (token cost trade-off)
+
+### Phase 4.1: Profile Fallback Chains
+
+**Completed 2024-12-30**
+**418 tests passing**
+
+Files modified:
+- `src/settings.js` - Array-based `tierProfiles`, migration from legacy single-string format
+- `src/router.js` - `getProfilesForTier()`, `getNextAvailableProfile()`, fallback iteration on 429
+- `settings.html` - Tag-based multi-select UI with drag-drop reordering
+- `styles.css` - Drag-and-drop styling with ST theme variables
+- `index.js` - Event handlers: `addProfileToChain()`, `removeProfileFromChain()`, `reorderChain()`, `setupDragAndDrop()`
+
+Key features:
+- Fallback chain format: `tierProfiles: { minor: ["Profile1", "Profile2", "Profile3"] }`
+- Backwards compatible: Old single-string format auto-migrates to single-item array
+- Rate limit aware: On 429, automatically skips to next profile in chain
+- Drag-and-drop UI: Reorder fallback priority by dragging profile chips
+
+### Phase 4.2: Kill Switch & Slash Commands
+
+**Status:** In Progress (2024-12-30)
+**Peer Review:** Gemini 2.5 Flash consensus reached
+
+**Gemini Consensus Items:**
+
+1. **Race Condition Fix** - Auto-abort existing controller before creating new:
+   ```javascript
+   if (currentAbortController) {
+       currentAbortController.abort(); // Auto-cancel previous run
+   }
+   currentAbortController = new AbortController();
+   ```
+
+2. **Module-level State** - Use module-level `currentAbortController` (not `globalThis`)
+   - Export `abortCurrentSpawn()` for slash command access
+   - Cleaner ES6 import dependency management
+
+3. **Single `/ensemble` Command** - Subcommands: spawn, status, clear, stop
+   - Keeps ST command namespace clean
+
+4. **Filter AbortError** - Don't show aborted NPCs as "failures"
+   - Show "Generation stopped by user" toast instead
+
+5. **Drawer for Tier Debugger** - Instead of modal, for side-by-side comparison
+
+**Signal Flow:**
+```
+spawnNPCResponses() → executeNPCRequest(signal) → directGenerate(signal) → fetch({ signal })
+abortCurrentSpawn() → controller.abort() → fetch throws AbortError → Promise.allSettled catches
+```
+
+### Phase 4.3: Tier Debugger UI (Planned)
+
+- Drawer panel (not modal) for side-by-side comparison
+- Lists all characters with inferred/override tiers
+- Session overrides (Map) vs permanent card writes
+- Uses ST's `writeExtensionField()` for permanent saves
+
+### Phase 4.4: Documentation (Planned)
+
+README.md sections: Installation, Quick Start, Tier Configuration, Function Tools, Slash Commands, Knowledge Hardening, Troubleshooting
 
 ## Open Questions
 

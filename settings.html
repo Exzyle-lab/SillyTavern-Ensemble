@@ -15,58 +15,103 @@
 
             <hr>
 
-            <h4 class="margin0">Tier Profiles</h4>
-            <small class="notes">Select which connection profile to use for each NPC tier. Leave empty to use the current active profile.</small>
+            <h4 class="margin0">Tier Profile Chains</h4>
+            <small class="notes">Configure fallback chains for each tier. First profile is primary; subsequent profiles are fallbacks if rate-limited or unavailable. Drag to reorder.</small>
 
             <div class="ensemble_tier_settings">
-                <div class="ensemble_tier_row">
-                    <label for="ensemble_tier_orchestrator">
+                <!-- Orchestrator Tier -->
+                <div class="ensemble_tier_row" data-tier="orchestrator">
+                    <label>
                         <span class="ensemble_tier_label">Orchestrator</span>
                         <small class="notes">GM/Narrator, narrative coherence</small>
                     </label>
-                    <select id="ensemble_tier_orchestrator" class="text_pole" data-tier="orchestrator">
-                        <option value="">Use current profile</option>
-                    </select>
+                    <div class="ensemble_fallback_chain">
+                        <div class="ensemble_profile_list" data-tier="orchestrator">
+                            <!-- Profile tags inserted here by JS -->
+                        </div>
+                        <div class="ensemble_add_profile">
+                            <select class="ensemble_profile_select text_pole" data-tier="orchestrator" title="Add profile to chain">
+                                <option value="">+ Add Profile</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small class="ensemble_chain_hint notes">No profiles configured - will use current active profile</small>
                 </div>
 
-                <div class="ensemble_tier_row">
-                    <label for="ensemble_tier_major">
+                <!-- Major Tier -->
+                <div class="ensemble_tier_row" data-tier="major">
+                    <label>
                         <span class="ensemble_tier_label">Major</span>
                         <small class="notes">Key NPCs with complex backstories</small>
                     </label>
-                    <select id="ensemble_tier_major" class="text_pole" data-tier="major">
-                        <option value="">Use current profile</option>
-                    </select>
+                    <div class="ensemble_fallback_chain">
+                        <div class="ensemble_profile_list" data-tier="major">
+                            <!-- Profile tags inserted here by JS -->
+                        </div>
+                        <div class="ensemble_add_profile">
+                            <select class="ensemble_profile_select text_pole" data-tier="major" title="Add profile to chain">
+                                <option value="">+ Add Profile</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small class="ensemble_chain_hint notes">No profiles configured - will use current active profile</small>
                 </div>
 
-                <div class="ensemble_tier_row">
-                    <label for="ensemble_tier_standard">
+                <!-- Standard Tier -->
+                <div class="ensemble_tier_row" data-tier="standard">
+                    <label>
                         <span class="ensemble_tier_label">Standard</span>
                         <small class="notes">Moderate complexity NPCs</small>
                     </label>
-                    <select id="ensemble_tier_standard" class="text_pole" data-tier="standard">
-                        <option value="">Use current profile</option>
-                    </select>
+                    <div class="ensemble_fallback_chain">
+                        <div class="ensemble_profile_list" data-tier="standard">
+                            <!-- Profile tags inserted here by JS -->
+                        </div>
+                        <div class="ensemble_add_profile">
+                            <select class="ensemble_profile_select text_pole" data-tier="standard" title="Add profile to chain">
+                                <option value="">+ Add Profile</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small class="ensemble_chain_hint notes">No profiles configured - will use current active profile</small>
                 </div>
 
-                <div class="ensemble_tier_row">
-                    <label for="ensemble_tier_minor">
+                <!-- Minor Tier -->
+                <div class="ensemble_tier_row" data-tier="minor">
+                    <label>
                         <span class="ensemble_tier_label">Minor</span>
                         <small class="notes">Shopkeepers, thugs, one-offs</small>
                     </label>
-                    <select id="ensemble_tier_minor" class="text_pole" data-tier="minor">
-                        <option value="">Use current profile</option>
-                    </select>
+                    <div class="ensemble_fallback_chain">
+                        <div class="ensemble_profile_list" data-tier="minor">
+                            <!-- Profile tags inserted here by JS -->
+                        </div>
+                        <div class="ensemble_add_profile">
+                            <select class="ensemble_profile_select text_pole" data-tier="minor" title="Add profile to chain">
+                                <option value="">+ Add Profile</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small class="ensemble_chain_hint notes">No profiles configured - will use current active profile</small>
                 </div>
 
-                <div class="ensemble_tier_row">
-                    <label for="ensemble_tier_utility">
+                <!-- Utility Tier -->
+                <div class="ensemble_tier_row" data-tier="utility">
+                    <label>
                         <span class="ensemble_tier_label">Utility</span>
                         <small class="notes">Judge, Archivist, Guardian agents</small>
                     </label>
-                    <select id="ensemble_tier_utility" class="text_pole" data-tier="utility">
-                        <option value="">Use current profile</option>
-                    </select>
+                    <div class="ensemble_fallback_chain">
+                        <div class="ensemble_profile_list" data-tier="utility">
+                            <!-- Profile tags inserted here by JS -->
+                        </div>
+                        <div class="ensemble_add_profile">
+                            <select class="ensemble_profile_select text_pole" data-tier="utility" title="Add profile to chain">
+                                <option value="">+ Add Profile</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small class="ensemble_chain_hint notes">No profiles configured - will use current active profile</small>
                 </div>
             </div>
 
@@ -87,3 +132,13 @@
         </div>
     </div>
 </div>
+
+<!-- Template for profile tag (used by JS) -->
+<template id="ensemble_profile_tag_template">
+    <div class="ensemble_profile_tag" draggable="true" data-profile="">
+        <span class="ensemble_profile_order"></span>
+        <i class="ensemble_drag_handle fa-solid fa-grip-vertical" title="Drag to reorder"></i>
+        <span class="ensemble_profile_name"></span>
+        <i class="ensemble_profile_remove fa-solid fa-times" title="Remove from chain"></i>
+    </div>
+</template>

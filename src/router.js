@@ -20,15 +20,16 @@ const MODULE_NAME = 'Ensemble';
 export const TIERS = Object.freeze(['orchestrator', 'major', 'standard', 'minor', 'utility']);
 
 /**
- * Default tier-to-profile mapping (empty = use current profile)
- * @type {Object.<string, string>}
+ * Default tier-to-profile mapping (empty array = use current profile)
+ * Values are arrays for fallback chain support.
+ * @type {Object.<string, string[]>}
  */
 const DEFAULT_TIER_PROFILES = {
-    orchestrator: '',
-    major: '',
-    standard: '',
-    minor: '',
-    utility: '',
+    orchestrator: [],
+    major: [],
+    standard: [],
+    minor: [],
+    utility: [],
 };
 
 /**
@@ -199,55 +200,136 @@ function getEnsembleSettings() {
 }
 
 /**
- * Get the ST connection profile for a given tier.
+ * Resolve a profile name (or array of names) to an array of profile objects.
+ * Supports both legacy single-string format and new array format.
  *
- * @param {string} tier - The tier name ('orchestrator', 'major', 'standard', 'minor', 'utility')
- * @returns {Object|null} The connection profile object, or null if not configured/found
+ * @param {string|string[]} profileConfig - Profile name or array of profile names
+ * @returns {Object[]} Array of resolved profile objects (empty if none found)
  */
-export function getProfileForTier(tier) {
-    const settings = getEnsembleSettings();
-    const profileName = settings.tierProfiles[tier];
-
-    // If no profile configured for this tier (empty string), return null to use current profile
-    if (!profileName) {
-        console.debug(`[${MODULE_NAME}] No profile configured for tier '${tier}', using current profile`);
-        return null;
-    }
-
-    // Access connection profiles from extension_settings
+function resolveProfilesToArray(profileConfig) {
     const context = SillyTavern.getContext();
     const connectionManager = context.extensionSettings.connectionManager;
 
     if (!connectionManager?.profiles?.length) {
         console.warn(`[${MODULE_NAME}] No connection profiles available`);
-        return null;
+        return [];
     }
 
-    // Try exact match first
-    let profile = connectionManager.profiles.find(p => p.name === profileName);
+    // Normalize to array
+    const profileNames = Array.isArray(profileConfig) ? profileConfig : [profileConfig];
+    const results = [];
 
-    if (profile) {
-        return profile;
-    }
+    for (const profileName of profileNames) {
+        if (!profileName) continue; // Skip empty strings
 
-    // Try fuzzy match using Fuse if available
-    try {
-        const { Fuse } = SillyTavern.libs;
-        if (Fuse) {
-            const fuse = new Fuse(connectionManager.profiles, { keys: ['name'] });
-            const results = fuse.search(profileName);
-            if (results.length > 0) {
-                profile = results[0].item;
-                console.debug(`[${MODULE_NAME}] Fuzzy matched profile '${profileName}' to '${profile.name}'`);
-                return profile;
-            }
+        // Try exact match first
+        let profile = connectionManager.profiles.find(p => p.name === profileName);
+
+        if (profile) {
+            results.push(profile);
+            continue;
         }
-    } catch (error) {
-        console.debug(`[${MODULE_NAME}] Fuse not available for fuzzy matching`);
+
+        // Try fuzzy match using Fuse if available
+        try {
+            const { Fuse } = SillyTavern.libs;
+            if (Fuse) {
+                const fuse = new Fuse(connectionManager.profiles, { keys: ['name'] });
+                const fuzzyResults = fuse.search(profileName);
+                if (fuzzyResults.length > 0) {
+                    profile = fuzzyResults[0].item;
+                    console.debug(`[${MODULE_NAME}] Fuzzy matched profile '${profileName}' to '${profile.name}'`);
+                    results.push(profile);
+                    continue;
+                }
+            }
+        } catch (error) {
+            console.debug(`[${MODULE_NAME}] Fuse not available for fuzzy matching`);
+        }
+
+        console.warn(`[${MODULE_NAME}] Profile '${profileName}' not found, skipping in fallback chain`);
     }
 
-    console.warn(`[${MODULE_NAME}] Profile '${profileName}' not found for tier '${tier}'`);
-    return null;
+    return results;
+}
+
+/**
+ * Get the ST connection profiles for a given tier as an ordered fallback chain.
+ * Returns an array of profiles in priority order. Supports both legacy single-string
+ * format (returns array with one profile) and new array format from settings.
+ *
+ * @param {string} tier - The tier name ('orchestrator', 'major', 'standard', 'minor', 'utility')
+ * @returns {Object[]} Array of connection profile objects (empty array if not configured/found)
+ */
+export function getProfilesForTier(tier) {
+    const settings = getEnsembleSettings();
+    const profileConfig = settings.tierProfiles[tier];
+
+    // If no profile configured for this tier (empty string or empty array), return empty array
+    if (!profileConfig || (Array.isArray(profileConfig) && profileConfig.length === 0)) {
+        console.debug(`[${MODULE_NAME}] No profiles configured for tier '${tier}', using current profile`);
+        return [];
+    }
+
+    return resolveProfilesToArray(profileConfig);
+}
+
+/**
+ * Get the ST connection profile for a given tier.
+ * Returns the first profile in the fallback chain.
+ *
+ * @deprecated Use getProfilesForTier() for fallback chain support
+ * @param {string} tier - The tier name ('orchestrator', 'major', 'standard', 'minor', 'utility')
+ * @returns {Object|null} The connection profile object, or null if not configured/found
+ */
+export function getProfileForTier(tier) {
+    const profiles = getProfilesForTier(tier);
+    return profiles.length > 0 ? profiles[0] : null;
+}
+
+/**
+ * Get the next available (non-rate-limited) profile for a given tier.
+ * Iterates through the fallback chain and returns the first profile that can accept requests.
+ *
+ * @param {string} tier - The tier name ('orchestrator', 'major', 'standard', 'minor', 'utility')
+ * @returns {{profile: Object|null, skipped: Array<{name: string, reason: string}>}}
+ *          The first available profile and list of skipped profiles with reasons
+ */
+export function getNextAvailableProfile(tier) {
+    const profiles = getProfilesForTier(tier);
+    const skipped = [];
+
+    // If no profiles configured, return null to use current profile
+    if (profiles.length === 0) {
+        console.debug(`[${MODULE_NAME}] No profiles in fallback chain for tier '${tier}', using current profile`);
+        return { profile: null, skipped };
+    }
+
+    for (const profile of profiles) {
+        const limitCheck = checkRateLimit(profile.name);
+
+        if (!limitCheck.isLimited) {
+            if (skipped.length > 0) {
+                console.debug(
+                    `[${MODULE_NAME}] Tier '${tier}': Using '${profile.name}' after skipping ${skipped.length} rate-limited profiles`,
+                    skipped
+                );
+            }
+            return { profile, skipped };
+        }
+
+        // Profile is rate limited, record and continue
+        const reason = `Rate limited, retry in ${Math.ceil(limitCheck.retryIn / 1000)}s`;
+        skipped.push({ name: profile.name, reason });
+        console.debug(`[${MODULE_NAME}] Skipping rate-limited profile '${profile.name}' for tier '${tier}': ${reason}`);
+    }
+
+    // All profiles are rate limited
+    console.warn(
+        `[${MODULE_NAME}] All ${profiles.length} profiles exhausted for tier '${tier}'`,
+        skipped
+    );
+    return { profile: null, skipped };
 }
 
 /**
@@ -288,23 +370,16 @@ function getChatCompletionSource(profile) {
 }
 
 /**
- * Perform a direct API call to generate a response, bypassing ST's sequential queue.
- *
- * This enables parallel NPC generation by making independent fetch requests
- * directly to the chat-completions endpoint.
+ * Perform a single API call to a specific profile.
+ * Internal helper for directGenerate() - does not handle fallback logic.
  *
  * @param {Array<{role: string, content: string}>} messages - Chat messages array
  * @param {Object|null} profile - Connection profile to use, or null for current settings
- * @param {Object} [options={}] - Additional generation options
- * @param {string} [options.model] - Model override
- * @param {number} [options.temperature=0.8] - Sampling temperature
- * @param {number} [options.max_tokens=500] - Maximum response tokens
- * @param {string} [options.npcId] - NPC identifier for error messages
- * @param {string} [options.tier] - Tier for error messages
+ * @param {Object} options - Generation options
  * @returns {Promise<Object>} The API response with generated content
- * @throws {Error} Descriptive error with profile name and status code on failure
+ * @throws {Error} Error with isRateLimited flag set for 429 errors
  */
-export async function directGenerate(messages, profile, options = {}) {
+async function singleProfileGenerate(messages, profile, options) {
     const {
         model,
         temperature = 0.8,
@@ -312,6 +387,8 @@ export async function directGenerate(messages, profile, options = {}) {
         npcId = 'unknown',
         tier = 'unknown',
     } = options;
+
+    const profileName = profile?.name || 'default';
 
     // Build the request body
     const generateData = {
@@ -334,78 +411,198 @@ export async function directGenerate(messages, profile, options = {}) {
         generateData.proxy = profile.proxy;
     }
 
-    const profileName = profile?.name || 'default';
-
     // Check rate limit before proceeding
     const limitCheck = checkRateLimit(profileName);
     if (limitCheck.isLimited) {
-        throw new Error(
+        const error = new Error(
             `[${MODULE_NAME}] Rate limited: ${limitCheck.reason}. Retry in ${Math.ceil(limitCheck.retryIn / 1000)}s`
         );
+        error.isRateLimited = true;
+        error.profileName = profileName;
+        throw error;
     }
 
-    try {
-        // getRequestHeaders is a global function in ST
-        const headers = typeof getRequestHeaders === 'function'
-            ? getRequestHeaders()
-            : { 'Content-Type': 'application/json' };
+    // getRequestHeaders is a global function in ST
+    const headers = typeof getRequestHeaders === 'function'
+        ? getRequestHeaders()
+        : { 'Content-Type': 'application/json' };
 
-        const response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(generateData),
-        });
+    const response = await fetch('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(generateData),
+    });
 
-        if (!response.ok) {
-            const statusText = response.statusText || 'Unknown error';
-            const status = response.status;
+    if (!response.ok) {
+        const statusText = response.statusText || 'Unknown error';
+        const status = response.status;
 
-            // Handle rate limit (429) with exponential backoff
-            if (status === 429) {
-                const retryAfterHeader = response.headers.get('Retry-After');
-                const retryAfterSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null;
-                const limitInfo = recordRateLimit(profileName, retryAfterSeconds);
-                throw new Error(
-                    `[${MODULE_NAME}] Rate limit (429) from ${profileName} for ${npcId} (tier: ${tier}). ` +
-                    `Retry in ${Math.ceil(limitInfo.retryIn / 1000)}s`
-                );
-            }
-
-            // Build actionable error message for other errors
-            let suggestion = '';
-            if (status === 401 || status === 403) {
-                suggestion = 'Authentication failed - check your API key in the connection profile.';
-            } else if (status === 404) {
-                suggestion = 'Endpoint not found - verify the API URL in your connection profile.';
-            } else if (status >= 500) {
-                suggestion = 'Server error - the API provider may be experiencing issues.';
-            }
-
-            throw new Error(
-                `[${MODULE_NAME}] Failed to generate response for ${npcId} (tier: ${tier}): ` +
-                `${profileName} returned ${status} ${statusText}. ${suggestion}`
+        // Handle rate limit (429) with exponential backoff
+        if (status === 429) {
+            const retryAfterHeader = response.headers.get('Retry-After');
+            const retryAfterSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null;
+            const limitInfo = recordRateLimit(profileName, retryAfterSeconds);
+            const error = new Error(
+                `[${MODULE_NAME}] Rate limit (429) from ${profileName} for ${npcId} (tier: ${tier}). ` +
+                `Retry in ${Math.ceil(limitInfo.retryIn / 1000)}s`
             );
-        }
-
-        const result = await response.json();
-
-        // Record successful request to reset backoff
-        recordSuccess(profileName);
-
-        return result;
-
-    } catch (error) {
-        // Re-throw if already formatted
-        if (error.message?.startsWith(`[${MODULE_NAME}]`)) {
+            error.isRateLimited = true;
+            error.profileName = profileName;
             throw error;
         }
 
-        // Wrap network errors with context
+        // Build actionable error message for other errors
+        let suggestion = '';
+        if (status === 401 || status === 403) {
+            suggestion = 'Authentication failed - check your API key in the connection profile.';
+        } else if (status === 404) {
+            suggestion = 'Endpoint not found - verify the API URL in your connection profile.';
+        } else if (status >= 500) {
+            suggestion = 'Server error - the API provider may be experiencing issues.';
+        }
+
         throw new Error(
-            `[${MODULE_NAME}] Network error generating response for ${npcId} (tier: ${tier}) ` +
-            `using profile '${profileName}': ${error.message}`
+            `[${MODULE_NAME}] Failed to generate response for ${npcId} (tier: ${tier}): ` +
+            `${profileName} returned ${status} ${statusText}. ${suggestion}`
         );
     }
+
+    const result = await response.json();
+
+    // Record successful request to reset backoff
+    recordSuccess(profileName);
+
+    return result;
+}
+
+/**
+ * Perform a direct API call to generate a response, bypassing ST's sequential queue.
+ *
+ * This enables parallel NPC generation by making independent fetch requests
+ * directly to the chat-completions endpoint. Supports fallback chains when
+ * a tier is specified - on rate limit (429), tries the next profile in the chain.
+ *
+ * @param {Array<{role: string, content: string}>} messages - Chat messages array
+ * @param {Object|null} profile - Connection profile to use, or null for current settings
+ * @param {Object} [options={}] - Additional generation options
+ * @param {string} [options.model] - Model override
+ * @param {number} [options.temperature=0.8] - Sampling temperature
+ * @param {number} [options.max_tokens=500] - Maximum response tokens
+ * @param {string} [options.npcId] - NPC identifier for error messages
+ * @param {string} [options.tier] - Tier for fallback chain lookup and error messages
+ * @param {boolean} [options.useFallback=true] - Whether to use fallback chain on rate limit
+ * @returns {Promise<Object>} The API response with generated content
+ * @throws {Error} Descriptive error with profile name and status code on failure
+ */
+export async function directGenerate(messages, profile, options = {}) {
+    const {
+        npcId = 'unknown',
+        tier = 'unknown',
+        useFallback = true,
+    } = options;
+
+    // If no tier specified or fallback disabled, use single profile directly
+    if (!useFallback || tier === 'unknown' || !TIERS.includes(tier)) {
+        try {
+            return await singleProfileGenerate(messages, profile, options);
+        } catch (error) {
+            // Re-throw if already formatted
+            if (error.message?.startsWith(`[${MODULE_NAME}]`)) {
+                throw error;
+            }
+            // Wrap network errors with context
+            const profileName = profile?.name || 'default';
+            throw new Error(
+                `[${MODULE_NAME}] Network error generating response for ${npcId} (tier: ${tier}) ` +
+                `using profile '${profileName}': ${error.message}`
+            );
+        }
+    }
+
+    // Get the full fallback chain for this tier
+    const profiles = getProfilesForTier(tier);
+
+    // If no profiles configured, use the provided profile (or current settings)
+    if (profiles.length === 0) {
+        try {
+            return await singleProfileGenerate(messages, profile, options);
+        } catch (error) {
+            if (error.message?.startsWith(`[${MODULE_NAME}]`)) {
+                throw error;
+            }
+            const profileName = profile?.name || 'default';
+            throw new Error(
+                `[${MODULE_NAME}] Network error generating response for ${npcId} (tier: ${tier}) ` +
+                `using profile '${profileName}': ${error.message}`
+            );
+        }
+    }
+
+    // Track which profiles we've tried
+    const triedProfiles = [];
+    let lastError = null;
+
+    // Find the starting index - start from the provided profile or beginning
+    let startIndex = 0;
+    if (profile) {
+        const providedIndex = profiles.findIndex(p => p.name === profile.name);
+        if (providedIndex !== -1) {
+            startIndex = providedIndex;
+        }
+    }
+
+    // Try each profile in the fallback chain
+    for (let i = startIndex; i < profiles.length; i++) {
+        const currentProfile = profiles[i];
+        triedProfiles.push(currentProfile.name);
+
+        try {
+            console.debug(
+                `[${MODULE_NAME}] Attempting profile '${currentProfile.name}' for ${npcId} (tier: ${tier})` +
+                (triedProfiles.length > 1 ? ` (fallback #${triedProfiles.length})` : '')
+            );
+
+            const result = await singleProfileGenerate(messages, currentProfile, options);
+
+            if (triedProfiles.length > 1) {
+                console.info(
+                    `[${MODULE_NAME}] Successfully used fallback profile '${currentProfile.name}' ` +
+                    `for ${npcId} after trying: ${triedProfiles.slice(0, -1).join(', ')}`
+                );
+            }
+
+            return result;
+
+        } catch (error) {
+            lastError = error;
+
+            // Only continue to next profile on rate limit errors
+            if (error.isRateLimited) {
+                console.debug(
+                    `[${MODULE_NAME}] Profile '${currentProfile.name}' rate limited, ` +
+                    `trying next in fallback chain for ${npcId}`
+                );
+                continue;
+            }
+
+            // For non-rate-limit errors, re-throw immediately
+            if (error.message?.startsWith(`[${MODULE_NAME}]`)) {
+                throw error;
+            }
+            throw new Error(
+                `[${MODULE_NAME}] Network error generating response for ${npcId} (tier: ${tier}) ` +
+                `using profile '${currentProfile.name}': ${error.message}`
+            );
+        }
+    }
+
+    // All profiles exhausted - throw comprehensive error
+    throw new Error(
+        `[${MODULE_NAME}] All ${triedProfiles.length} profiles exhausted for ${npcId} (tier: ${tier}). ` +
+        `Tried: ${triedProfiles.join(', ')}. ` +
+        `Last error: ${lastError?.message || 'Unknown error'}. ` +
+        `Configure additional fallback profiles or wait for rate limits to reset.`
+    );
 }
 
 /**
@@ -438,23 +635,43 @@ export async function generateForCharacter(characterId, messages, options = {}) 
 
 /**
  * Update the tier-to-profile mapping in settings.
+ * Supports both single profile (legacy) and array of profiles (fallback chain).
  *
  * @param {string} tier - The tier to update
- * @param {string} profileName - The profile name to assign (empty string = use current)
+ * @param {string|string[]} profiles - Profile name(s) to assign (empty string/array = use current)
  */
-export function setTierProfile(tier, profileName) {
+export function setTierProfile(tier, profiles) {
     if (!TIERS.includes(tier)) {
         console.warn(`[${MODULE_NAME}] Invalid tier '${tier}'`);
         return;
     }
 
     const settings = getEnsembleSettings();
-    settings.tierProfiles[tier] = profileName;
+    settings.tierProfiles[tier] = profiles;
 
     const context = SillyTavern.getContext();
     context.saveSettingsDebounced();
 
-    console.debug(`[${MODULE_NAME}] Updated tier '${tier}' to use profile '${profileName || '(current)'}'`);
+    const displayValue = Array.isArray(profiles)
+        ? (profiles.length > 0 ? profiles.join(' -> ') : '(current)')
+        : (profiles || '(current)');
+
+    console.debug(`[${MODULE_NAME}] Updated tier '${tier}' to use profiles: ${displayValue}`);
+}
+
+/**
+ * Set a fallback chain of profiles for a tier.
+ * Convenience wrapper for setTierProfile with array format.
+ *
+ * @param {string} tier - The tier to update
+ * @param {string[]} profileNames - Ordered array of profile names (first = primary, rest = fallbacks)
+ */
+export function setTierFallbackChain(tier, profileNames) {
+    if (!Array.isArray(profileNames)) {
+        console.warn(`[${MODULE_NAME}] setTierFallbackChain requires an array of profile names`);
+        return;
+    }
+    setTierProfile(tier, profileNames);
 }
 
 /**
