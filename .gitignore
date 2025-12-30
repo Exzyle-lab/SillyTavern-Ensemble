@@ -1,6 +1,6 @@
 .claude/settings.local.json
 nul
-reference_materials/SillyTavern
+reference_materials/
 
 # Testing infrastructure
 package.json
