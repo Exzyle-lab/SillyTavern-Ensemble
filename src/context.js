@@ -480,10 +480,16 @@ export async function buildNPCContext(characterId, situation) {
     // Format knowledge from filtered entries
     const knowledge = formatKnowledge(npcEntries);
 
+    // Extract raw knowledge content for programmatic access
+    const knowledgeEntries = npcEntries
+        .map(entry => (entry.content || '').trim())
+        .filter(content => content.length > 0);
+
     const contextData = {
         npc_name: name,
         identity: identity || 'No character information available.',
-        knowledge: knowledge,
+        knowledge: knowledge, // Formatted string for prompts
+        knowledgeEntries: knowledgeEntries, // Raw array for queries
         scene: {
             location: sceneState.location,
             time: sceneState.time,

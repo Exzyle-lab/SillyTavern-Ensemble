@@ -388,16 +388,21 @@ export async function queryNPCKnowledge({ npc_id, topic }) {
     // Get NPC's filtered context (uses knowledge hardening)
     const context = await buildNPCContext(characterId, '');
 
+    // Use knowledgeEntries array for filtering, with defensive check
+    const entries = Array.isArray(context.knowledgeEntries)
+        ? context.knowledgeEntries
+        : [];
+
     // Search knowledge entries for topic mentions (case-insensitive)
     const topicLower = topic.toLowerCase();
-    const relevantKnowledge = context.knowledge.filter(entry =>
-        entry.toLowerCase().includes(topicLower)
+    const relevantKnowledge = entries.filter(entry =>
+        typeof entry === 'string' && entry.toLowerCase().includes(topicLower)
     );
 
     logger.info({
         event: 'knowledge_query_complete',
         npc: npc_id,
-        totalEntries: context.knowledge.length,
+        totalEntries: entries.length,
         matchCount: relevantKnowledge.length,
     }, correlationId);
 
@@ -405,7 +410,7 @@ export async function queryNPCKnowledge({ npc_id, topic }) {
         npc: npc_id,
         success: true,
         knowledge: relevantKnowledge,
-        totalEntries: context.knowledge.length,
+        totalEntries: entries.length,
         matchCount: relevantKnowledge.length,
         correlationId: correlationId,
     };
