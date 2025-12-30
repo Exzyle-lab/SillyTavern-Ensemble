@@ -409,13 +409,33 @@ Implement a lock to prevent conflicts while parallel generation runs:
 
 5. ~~**GM Tool Awareness**~~: GM prompt dynamically populated with NPC list from scene state. NPCs present in scene derived from lorebook/chat context.
 
-### Remaining
+### Resolved (from ST source analysis)
 
-1. **Lorebook Filtering API**: Need to verify exact API for iterating lorebook entries and checking `characterFilter` field. May need to use `getContext().extensionSettings` or similar.
+1. **Lorebook Filtering API** ✓
+   - `loadWorldInfo(name)` returns `{ entries: { [uid]: entryObject } }`
+   - `getSortedEntries()` returns all entries sorted by strategy
+   - Entry structure includes `characterFilter: { names: string[], tags: string[], isExclude: boolean }`
+   - Filter logic: if `isExclude=false`, only characters in `names[]` see entry
+   - `WORLDINFO_SCAN_DONE` event provides activated entries (mutable)
 
-2. **Character Card Extension Data**: Verify `card.data.extensions` is the correct path for storing ensemble-specific overrides (tier, model).
+2. **Character Card Extension Data** ✓
+   - Path: `characters[id].data.extensions.ensemble`
+   - Write: `await writeExtensionField(characterId, 'ensemble', { tier: 'major' })`
+   - Persists to PNG metadata via `/api/characters/merge-attributes`
 
-3. **ST API Connection Profile Access**: How to programmatically get endpoint/credentials from a named ST connection profile for direct fetch calls.
+3. **Connection Profile Access** ✓
+   - Profiles in: `extension_settings.connectionManager.profiles[]`
+   - Find by name: `findProfileByName(name)` returns profile object
+   - Profile structure: `{ id, name, mode, api, model, preset, proxy, 'api-url', 'secret-id', ... }`
+   - Apply profile: `await applyConnectionProfile(profile)`
+   - Get credentials: `await findSecret(key, profile['secret-id'])`
+
+4. **Generation Queue** ✓
+   - **No explicit queue in `generateRaw()`** — sequential behavior comes from group chat's `for...await` loop
+   - Direct API endpoint: `/api/backends/chat-completions/generate`
+   - Each fetch is independent — ST reverse proxy supports concurrent requests
+   - Shared state (`abortController`, `is_group_generating`, `this_chid`) prevents overlapping group calls
+   - **Solution**: Direct fetch calls bypass the sequential loop entirely
 
 ## ST Extension Hooks (Relevant)
 
@@ -442,10 +462,20 @@ For computer-use scenarios (if needed later), Claude Haiku 4.5 has unmatched 50.
 
 When starting work:
 1. This file (CLAUDE.md)
-2. `manifest.json` for extension metadata
-3. `src/router.js` for backend selection logic
-4. `src/context.js` for prompt building
-5. `src/tools.js` for function tool implementations
+2. `ST-API-REFERENCE.md` for SillyTavern API documentation
+3. `manifest.json` for extension metadata
+4. `src/router.js` for backend selection logic
+5. `src/context.js` for prompt building
+6. `src/tools.js` for function tool implementations
+
+### SillyTavern Source Reference
+
+Local copy at `reference_materials/SillyTavern/` for API research:
+- `public/scripts/world-info.js` — Lorebook/World Info APIs
+- `public/scripts/characters.js` — Character card handling
+- `public/scripts/extensions.js` — Extension system, getContext()
+- `public/scripts/openai.js` — Chat completion generation
+- `public/scripts/connection-profiles/` — Profile management
 
 ## UX Considerations
 
@@ -506,7 +536,24 @@ logger.info({ correlationId, npc: 'harley', event: 'response_received', latency:
 
 Essential for debugging parallel execution issues.
 
-## Commit Style
+## Development Workflow
+
+### Sub-Agent Preference
+
+**Sub-agents are the preferred method for large, complex tasks including development.** The orchestrating agent should:
+
+1. **Launch sub-agents** to carry out implementation work
+2. **Act as code reviewer** rather than manually writing code
+3. **Coordinate multiple parallel sub-agents** when tasks are independent
+4. **Synthesize findings** from exploration sub-agents into documentation
+
+This approach:
+- Reduces context window pressure on the main agent
+- Enables parallel exploration/development
+- Maintains consistent code review quality
+- Scales better for complex multi-file changes
+
+### Commit Style
 
 ```
 feat: Add spawn_npc_responses function tool

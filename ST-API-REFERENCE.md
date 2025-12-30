@@ -409,17 +409,184 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({
 
 ## Ensemble-Specific Findings
 
-### Remaining Questions Answered
+### Lorebook Filtering API (Verified from Source)
 
-1. **Lorebook Filtering API**: Use `WORLDINFO_SCAN_DONE` event for activated entries. For full iteration, may need to access via STscript commands or internal APIs (needs further research).
+**Get all entries programmatically:**
+```javascript
+import { loadWorldInfo, getSortedEntries } from './world-info.js';
 
-2. **Character Card Extension Data**: Confirmed path is `card.data.extensions.ensemble` - use `writeExtensionField()` to persist.
+// Load specific world
+const worldData = await loadWorldInfo('worldName');
+const allEntries = Object.values(worldData.entries);
 
-3. **Connection Profile Access**: Use `/profile-get [name]` slash command to retrieve profile as JSON. For programmatic switching, use `/profile [name]`.
+// Get all entries across all lore types (global, character, chat, persona)
+const sortedEntries = await getSortedEntries();
+```
 
-### Generation Approach
+**Entry characterFilter structure:**
+```javascript
+{
+  characterFilter: {
+    names: string[],      // Character filenames (use getCharaFilename())
+    tags: string[],       // Tag IDs
+    isExclude: boolean    // false = include only these, true = exclude these
+  }
+}
+```
 
-For parallel generation bypassing `generateRaw()` queue:
-- Use `generateRaw()` for single requests (respects ST's API handling)
-- For true parallelism, need to make direct fetch calls to the API endpoints
-- Connection profile data can be retrieved via `/profile-get` to get endpoint/model info
+**Filter entries for specific NPC:**
+```javascript
+function getEntriesForNPC(npcFilename, allEntries) {
+  return allEntries.filter(entry => {
+    // No filter = common knowledge
+    if (!entry.characterFilter?.names?.length &&
+        !entry.characterFilter?.tags?.length) {
+      return true;
+    }
+
+    // Apply character filter
+    if (entry.characterFilter?.names?.length > 0) {
+      const nameIncluded = entry.characterFilter.names.includes(npcFilename);
+      const filtered = entry.characterFilter.isExclude ? nameIncluded : !nameIncluded;
+      if (filtered) return false;  // Skip this entry
+    }
+
+    return true;
+  });
+}
+```
+
+### Connection Profile Access (Verified from Source)
+
+**Location:** `extension_settings.connectionManager`
+
+```javascript
+// Get all profiles
+const profiles = extension_settings.connectionManager.profiles;
+
+// Find profile by name (with fuzzy matching)
+function findProfileByName(name) {
+  const exact = profiles.find(p => p.name === name);
+  if (exact) return exact;
+
+  const fuse = new Fuse(profiles, { keys: ['name'] });
+  const results = fuse.search(name);
+  return results.length > 0 ? results[0].item : null;
+}
+
+// Profile object structure
+{
+  id: string,
+  name: string,
+  mode: 'cc' | 'tc',        // Chat completion or text completion
+  api: string,               // API type
+  model: string,             // Model name
+  preset: string,            // Settings preset
+  proxy: string,             // Proxy preset
+  'api-url': string,         // Server URL
+  'secret-id': string,       // Credential ID
+  instruct: string,          // Instruct template
+  context: string,           // Context template
+  // ... more fields
+}
+
+// Get secret/credential value
+import { findSecret } from './secrets.js';
+const apiKey = await findSecret(SECRET_KEYS.OPENAI, profile['secret-id']);
+```
+
+### Generation Queue Analysis (Verified from Source)
+
+**Root cause of sequential generation:**
+
+The queue is NOT in `generateRaw()`. It's in `generateGroupWrapper()` in `group-chats.js`:
+
+```javascript
+// Line 945+ in group-chats.js
+async function generateGroupWrapper(byAutoMode, type, params) {
+  for (const chId of activatedMembers) {  // SEQUENTIAL LOOP
+    setCharacterId(chId);
+    textResult = await Generate(generateType, params);  // BLOCKS HERE
+  }
+}
+```
+
+**Bypass pattern for parallel generation:**
+
+```javascript
+// Direct API call - no queue!
+async function directGenerate(messages, model) {
+  const generate_data = {
+    type: 'quiet',
+    messages: messages,
+    model: model,
+    temperature: 0.8,
+    max_tokens: 200,
+    stream: false,
+    chat_completion_source: 'openai',  // or 'claude', etc.
+  };
+
+  const response = await fetch('/api/backends/chat-completions/generate', {
+    method: 'POST',
+    headers: getRequestHeaders(),
+    body: JSON.stringify(generate_data),
+  });
+
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+// Parallel execution
+const results = await Promise.allSettled(
+  npcs.map(npc => directGenerate(buildPrompt(npc), getModel(npc)))
+);
+```
+
+### Character Extension Fields (Verified from Source)
+
+**writeExtensionField implementation:**
+```javascript
+// From extensions.js line 1540
+export async function writeExtensionField(characterId, key, value) {
+  const character = context.characters[characterId];
+
+  // Set in memory
+  const path = `data.extensions.${key}`;
+  setValueByPath(character, path, value);
+
+  // Persist to server
+  await fetch('/api/characters/merge-attributes', {
+    method: 'POST',
+    headers: getRequestHeaders(),
+    body: JSON.stringify({
+      avatar: character.avatar,
+      data: { extensions: { [key]: value } }
+    }),
+  });
+}
+```
+
+**Usage for Ensemble:**
+```javascript
+// Write NPC tier override
+await writeExtensionField(characterId, 'ensemble', {
+  tier: 'major',
+  model: 'claude-sonnet'
+});
+
+// Read it back
+const ensemble = characters[characterId]?.data?.extensions?.ensemble;
+const tier = ensemble?.tier || inferTier(characterId);
+```
+
+### Key Source Files
+
+| Purpose | File Path |
+|---------|-----------|
+| World Info API | `public/scripts/world-info.js` |
+| Connection Profiles | `public/scripts/extensions/connection-manager/index.js` |
+| Secrets/Credentials | `public/scripts/secrets.js` |
+| Generation System | `public/script.js` (generateRaw), `public/scripts/openai.js` (sendOpenAIRequest) |
+| Group Chat Queue | `public/scripts/group-chats.js` (generateGroupWrapper) |
+| Character Handling | `public/scripts/extensions.js` (writeExtensionField) |
+| Context API | `public/scripts/st-context.js` (getContext) |
