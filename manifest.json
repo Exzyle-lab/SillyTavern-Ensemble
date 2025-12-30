@@ -2,7 +2,7 @@
   "display_name": "Ensemble",
   "version": "1.0.0",
   "description": "Parallel NPC generation with knowledge isolation via lorebook filtering",
-  "author": "SillyTavern-Ensemble",
+  "author": "Exzyle",
   "homePage": "https://github.com/SillyTavern/SillyTavern-Ensemble",
   "js": "index.js",
   "css": "styles.css",
