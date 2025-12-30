@@ -392,7 +392,7 @@ Implement a lock to prevent conflicts while parallel generation runs:
 |-------|-------|-------------|--------|
 | 1 | Core plumbing | Extension scaffold, router, single tool (`spawn_npc_responses`), `Promise.allSettled()` working | **Complete** |
 | 2 | Context building | Lorebook filtering, knowledge hardening, dynamic prompts from character cards | **Complete** |
-| 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking | Pending |
+| 3 | Full orchestration | All 4 tools, model tiering, error handling, rate limit tracking | **Complete** |
 | 4 | Integration | Slash command, debug logging, documentation | Pending |
 
 ### Phase 1 Implementation Notes
@@ -447,6 +447,56 @@ Files modified:
 // isExclude=true + names = exclude these characters (visible to everyone else)
 // Tag-only filters = excluded for safety (Phase 3)
 ```
+
+### Phase 3 Implementation Notes
+
+**Completed 2024-12-30**
+
+Files created:
+- `src/rate-limiter.js` (~140 LOC) - Per-profile rate limit tracking with exponential backoff
+- `src/ui-lock.js` (~68 LOC) - UI input locking during parallel generation
+- `tests/rate-limiter.test.js` (39 tests) - Rate limiter test coverage
+- `tests/ui-lock.test.js` (24 tests) - UI lock test coverage
+
+Files modified:
+- `src/router.js` - Rate limiter integration, "Minion Fallacy" fix, default tier change
+- `src/context.js` - Lenient JSON parsing for scene state, Toast warnings
+- `src/orchestrator.js` - Added queryNPCKnowledge(), resolveAction(), auditNarrative()
+- `src/tools.js` - Registered 3 new tools (query_npc_knowledge, resolve_action, audit_narrative)
+
+**Key Phase 3 Features:**
+
+1. **Rate Limiter** (`src/rate-limiter.js`)
+   - `checkRateLimit(profileName)` - Check if profile can make requests
+   - `recordRateLimit(profileName, retryAfterHeader)` - Track 429 errors with exponential backoff
+   - `recordSuccess(profileName)` - Reset backoff on success
+   - Backoff formula: `5000 * 2^errors`, max 5 minutes
+
+2. **"Minion Fallacy" Fix** (Peer Review)
+   - `getChatCompletionSource()` now returns `profile.api` for unknown APIs
+   - Enables local models (Oobabooga, KoboldCPP) as NPC backends
+
+3. **Default Tier Change** (Peer Review)
+   - Changed from 'minor' to 'standard' for unconfigured characters
+   - Prioritizes quality over speed
+
+4. **Lenient JSON Parsing** (Peer Review)
+   - `lenientJSONParse()` handles trailing commas, single quotes
+   - Toast warning on parse failure: "Scene state corrupted in Lorebook. Using defaults."
+
+5. **New Function Tools:**
+   - `query_npc_knowledge` - Check what NPC knows about a topic
+   - `resolve_action` - Judge sub-agent for mechanical resolution
+   - `audit_narrative` - Guardian sub-agent for narrative compliance
+
+6. **UI Locking** (`src/ui-lock.js`)
+   - `lockInput()` / `unlockInput()` - Prevent context contamination during generation
+   - `withInputLock(fn)` - Convenience wrapper with automatic unlock
+
+**Unit Testing:**
+- 382 tests across 8 files (up from 258)
+- New test files: rate-limiter.test.js (39), ui-lock.test.js (24)
+- Updated: router.test.js (+11), context.test.js (+9), orchestrator.test.js (+17), tools.test.js (+25)
 
 ## Open Questions
 
