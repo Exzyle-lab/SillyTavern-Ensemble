@@ -9,6 +9,8 @@
  * @module router
  */
 
+import { checkRateLimit, recordSuccess, recordRateLimit } from './rate-limiter.js';
+
 const MODULE_NAME = 'Ensemble';
 
 /**
@@ -168,7 +170,7 @@ export async function inferTier(characterId) {
     if (complexity > 3) {
         return 'standard';
     }
-    return 'minor';
+    return 'standard';
 }
 
 /**
@@ -282,7 +284,7 @@ function getChatCompletionSource(profile) {
         'huggingface': 'huggingface',
     };
 
-    return apiMappings[profile.api] || 'openai';
+    return apiMappings[profile.api] || profile.api;
 }
 
 /**
@@ -332,7 +334,15 @@ export async function directGenerate(messages, profile, options = {}) {
         generateData.proxy = profile.proxy;
     }
 
-    const profileName = profile?.name || 'current';
+    const profileName = profile?.name || 'default';
+
+    // Check rate limit before proceeding
+    const limitCheck = checkRateLimit(profileName);
+    if (limitCheck.isLimited) {
+        throw new Error(
+            `[${MODULE_NAME}] Rate limited: ${limitCheck.reason}. Retry in ${Math.ceil(limitCheck.retryIn / 1000)}s`
+        );
+    }
 
     try {
         // getRequestHeaders is a global function in ST
@@ -350,11 +360,20 @@ export async function directGenerate(messages, profile, options = {}) {
             const statusText = response.statusText || 'Unknown error';
             const status = response.status;
 
-            // Build actionable error message
-            let suggestion = '';
+            // Handle rate limit (429) with exponential backoff
             if (status === 429) {
-                suggestion = 'Rate limit exceeded - try again in a few minutes or switch to a different backend profile.';
-            } else if (status === 401 || status === 403) {
+                const retryAfterHeader = response.headers.get('Retry-After');
+                const retryAfterSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null;
+                const limitInfo = recordRateLimit(profileName, retryAfterSeconds);
+                throw new Error(
+                    `[${MODULE_NAME}] Rate limit (429) from ${profileName} for ${npcId} (tier: ${tier}). ` +
+                    `Retry in ${Math.ceil(limitInfo.retryIn / 1000)}s`
+                );
+            }
+
+            // Build actionable error message for other errors
+            let suggestion = '';
+            if (status === 401 || status === 403) {
                 suggestion = 'Authentication failed - check your API key in the connection profile.';
             } else if (status === 404) {
                 suggestion = 'Endpoint not found - verify the API URL in your connection profile.';
@@ -369,6 +388,10 @@ export async function directGenerate(messages, profile, options = {}) {
         }
 
         const result = await response.json();
+
+        // Record successful request to reset backoff
+        recordSuccess(profileName);
+
         return result;
 
     } catch (error) {

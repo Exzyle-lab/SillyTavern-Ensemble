@@ -12,7 +12,7 @@
 
 import { logger, generateCorrelationId } from './logger.js';
 import { inferTier, getProfileForTier, directGenerate } from './router.js';
-import { buildNPCPromptWithContext } from './context.js';
+import { buildNPCPromptWithContext, buildNPCContext } from './context.js';
 
 /**
  * Find a character's index by name (case-insensitive).
@@ -312,4 +312,268 @@ export function getSceneCharacters() {
     }
 
     return [];
+}
+
+/**
+ * Query what an NPC knows about a specific topic.
+ * Uses knowledge hardening - NPC only sees their filtered lorebook entries.
+ *
+ * @param {Object} params - Query parameters
+ * @param {string} params.npc_id - NPC character name
+ * @param {string} params.topic - Topic to query about
+ * @returns {Promise<Object>} Result with relevant knowledge entries
+ */
+export async function queryNPCKnowledge({ npc_id, topic }) {
+    const correlationId = generateCorrelationId();
+
+    logger.info({
+        event: 'knowledge_query_start',
+        npc: npc_id,
+        topic: topic,
+    }, correlationId);
+
+    // Find character by name
+    const characterId = findCharacterByName(npc_id);
+    if (characterId === null) {
+        logger.warn({
+            event: 'knowledge_query_failed',
+            npc: npc_id,
+            reason: 'Character not found',
+        }, correlationId);
+
+        return {
+            npc: npc_id,
+            success: false,
+            knowledge: [],
+            error: `Character "${npc_id}" not found`,
+            correlationId: correlationId,
+        };
+    }
+
+    // Get NPC's filtered context (uses knowledge hardening)
+    const context = await buildNPCContext(characterId, '');
+
+    // Search knowledge entries for topic mentions (case-insensitive)
+    const topicLower = topic.toLowerCase();
+    const relevantKnowledge = context.knowledge.filter(entry =>
+        entry.toLowerCase().includes(topicLower)
+    );
+
+    logger.info({
+        event: 'knowledge_query_complete',
+        npc: npc_id,
+        totalEntries: context.knowledge.length,
+        matchCount: relevantKnowledge.length,
+    }, correlationId);
+
+    return {
+        npc: npc_id,
+        success: true,
+        knowledge: relevantKnowledge,
+        totalEntries: context.knowledge.length,
+        matchCount: relevantKnowledge.length,
+        correlationId: correlationId,
+    };
+}
+
+/**
+ * Resolve a mechanical action via the Judge sub-agent.
+ *
+ * @param {Object} params - Resolution parameters
+ * @param {string} params.actor - Who is performing the action
+ * @param {string} params.action - What action is being attempted
+ * @param {Object} [params.context={}] - Additional context (stats, difficulty, etc.)
+ * @returns {Promise<Object>} Verdict with success, outcome, and reasoning
+ */
+export async function resolveAction({ actor, action, context = {} }) {
+    const correlationId = generateCorrelationId();
+
+    logger.info({
+        event: 'judge_start',
+        actor,
+        action,
+    }, correlationId);
+
+    // Judge system prompt (inline template)
+    const judgePrompt = `You are the Judge, a mechanical arbiter for action resolution.
+
+Given an action attempt, determine the outcome fairly based on:
+- The actor's capabilities (if known from context)
+- The difficulty of the action
+- Environmental factors
+
+Respond ONLY with valid JSON in this exact format:
+{
+  "success": true/false,
+  "outcome": "Brief description of what happens",
+  "reasoning": "Why this outcome was determined",
+  "consequences": ["Any lasting effects"]
+}`;
+
+    const userMessage = `Actor: ${actor}
+Action: ${action}
+Context: ${JSON.stringify(context)}
+
+Resolve this action.`;
+
+    const messages = [
+        { role: 'system', content: judgePrompt },
+        { role: 'user', content: userMessage }
+    ];
+
+    try {
+        // Use utility tier for Judge
+        const profile = getProfileForTier('utility');
+        const result = await directGenerate(messages, profile, {
+            npcId: 'judge',
+            tier: 'utility',
+            max_tokens: 300,
+            temperature: 0.3, // Low temp for consistent rulings
+        });
+
+        // Parse the JSON response
+        let verdict;
+        const responseText = result?.choices?.[0]?.message?.content ||
+                            result?.content ||
+                            (typeof result === 'string' ? result : '');
+
+        try {
+            verdict = JSON.parse(responseText.trim());
+        } catch {
+            // Try to extract JSON from markdown code blocks
+            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+            if (jsonMatch) {
+                verdict = JSON.parse(jsonMatch[1].trim());
+            } else {
+                throw new Error('Could not parse Judge response as JSON');
+            }
+        }
+
+        logger.info({
+            event: 'judge_complete',
+            success: verdict.success,
+        }, correlationId);
+
+        return {
+            actor,
+            action,
+            ...verdict,
+            correlationId
+        };
+    } catch (error) {
+        logger.error({
+            event: 'judge_error',
+            error: error.message,
+        }, correlationId);
+
+        return {
+            actor,
+            action,
+            success: false,
+            outcome: 'Resolution failed',
+            reasoning: error.message,
+            consequences: [],
+            error: error.message,
+            correlationId
+        };
+    }
+}
+
+/**
+ * Audit a narrative against a mechanical verdict.
+ * Guardian checks if the narrative faithfully represents the verdict.
+ *
+ * @param {Object} params - Audit parameters
+ * @param {Object} params.verdict - The mechanical verdict to check against
+ * @param {string} params.narrative - The narrative description to audit
+ * @returns {Promise<Object>} Audit result with compliance status
+ */
+export async function auditNarrative({ verdict, narrative }) {
+    const correlationId = generateCorrelationId();
+
+    logger.info({
+        event: 'guardian_start',
+    }, correlationId);
+
+    // Guardian system prompt (inline template)
+    const guardianPrompt = `You are the Guardian, a quality auditor for narrative compliance.
+
+Your job is to verify that a narrative faithfully represents a mechanical verdict.
+Check for:
+- Does the narrative match the success/failure of the verdict?
+- Are the consequences properly reflected?
+- Are there any contradictions or embellishments that violate the ruling?
+
+Respond ONLY with valid JSON in this exact format:
+{
+  "compliant": true/false,
+  "issues": ["List of specific issues found, if any"],
+  "severity": "none" | "minor" | "major",
+  "recommendation": "What should be changed, if anything"
+}`;
+
+    const userMessage = `Verdict: ${JSON.stringify(verdict)}
+
+Narrative: "${narrative}"
+
+Audit this narrative for compliance with the verdict.`;
+
+    const messages = [
+        { role: 'system', content: guardianPrompt },
+        { role: 'user', content: userMessage }
+    ];
+
+    try {
+        // Use utility tier for Guardian
+        const profile = getProfileForTier('utility');
+        const result = await directGenerate(messages, profile, {
+            npcId: 'guardian',
+            tier: 'utility',
+            max_tokens: 300,
+            temperature: 0.2, // Very low temp for consistent auditing
+        });
+
+        // Parse the JSON response
+        let audit;
+        const responseText = result?.choices?.[0]?.message?.content ||
+                            result?.content ||
+                            (typeof result === 'string' ? result : '');
+
+        try {
+            audit = JSON.parse(responseText.trim());
+        } catch {
+            // Try to extract JSON from markdown code blocks
+            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+            if (jsonMatch) {
+                audit = JSON.parse(jsonMatch[1].trim());
+            } else {
+                throw new Error('Could not parse Guardian response as JSON');
+            }
+        }
+
+        logger.info({
+            event: 'guardian_complete',
+            compliant: audit.compliant,
+            severity: audit.severity,
+        }, correlationId);
+
+        return {
+            ...audit,
+            correlationId
+        };
+    } catch (error) {
+        logger.error({
+            event: 'guardian_error',
+            error: error.message,
+        }, correlationId);
+
+        return {
+            compliant: false,
+            issues: ['Audit failed: ' + error.message],
+            severity: 'major',
+            recommendation: 'Re-run audit after fixing the error',
+            error: error.message,
+            correlationId
+        };
+    }
 }

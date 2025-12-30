@@ -16,6 +16,9 @@ import { logger } from './logger.js';
  */
 const REGISTERED_TOOL_NAMES = Object.freeze([
     'spawn_npc_responses',
+    'query_npc_knowledge',
+    'resolve_action',
+    'audit_narrative',
 ]);
 
 /**
@@ -128,11 +131,283 @@ const spawnNPCResponsesTool = {
 };
 
 /**
+ * query_npc_knowledge tool definition
+ *
+ * Queries what a specific NPC knows about a topic, using knowledge hardening
+ * to ensure the NPC only sees lorebook entries they have access to.
+ */
+const queryNPCKnowledgeTool = {
+    name: 'query_npc_knowledge',
+    displayName: 'Query NPC Knowledge',
+    description: 'Check what a specific NPC knows about a topic. Uses knowledge hardening - the NPC only sees lorebook entries they have access to. Returns matching knowledge entries.',
+    parameters: {
+        $schema: 'http://json-schema.org/draft-04/schema#',
+        type: 'object',
+        properties: {
+            npc_id: {
+                type: 'string',
+                description: 'The NPC character name to query',
+            },
+            topic: {
+                type: 'string',
+                description: 'The topic to search for in the NPC\'s knowledge',
+            },
+        },
+        required: ['npc_id', 'topic'],
+    },
+
+    /**
+     * Execute the tool - queries NPC knowledge via orchestrator
+     * @param {Object} params - Tool parameters
+     * @param {string} params.npc_id - NPC character name
+     * @param {string} params.topic - Topic to search for
+     * @returns {Promise<Object>} Matching knowledge entries
+     */
+    action: async (params) => {
+        logger.info({
+            event: 'tool_invoked',
+            tool: 'query_npc_knowledge',
+            npc: params.npc_id,
+            topic: params.topic,
+        });
+
+        try {
+            const { queryNPCKnowledge } = await import('./orchestrator.js');
+            const result = await queryNPCKnowledge(params);
+
+            logger.info({
+                event: 'tool_completed',
+                tool: 'query_npc_knowledge',
+                success: result.success,
+            });
+
+            return result;
+        } catch (error) {
+            logger.error({
+                event: 'tool_error',
+                tool: 'query_npc_knowledge',
+                error: error.message,
+            });
+            throw error;
+        }
+    },
+
+    /**
+     * Format message for UI toast display
+     * @param {Object} params - Tool parameters
+     * @returns {string} User-facing message
+     */
+    formatMessage: (params) => {
+        return `Checking what ${params.npc_id} knows about "${params.topic}"`;
+    },
+
+    /**
+     * Conditional registration check
+     * Only registers if extension is enabled
+     * @returns {boolean} Whether to register this tool
+     */
+    shouldRegister: () => {
+        try {
+            const context = SillyTavern.getContext();
+            return context.extensionSettings?.ensemble?.enabled !== false;
+        } catch {
+            return true;
+        }
+    },
+
+    // Don't hide tool calls from chat history
+    stealth: false,
+};
+
+/**
+ * resolve_action tool definition
+ *
+ * Resolves a mechanical action via the Judge sub-agent, determining
+ * success/failure, outcome, and consequences.
+ */
+const resolveActionTool = {
+    name: 'resolve_action',
+    displayName: 'Resolve Action',
+    description: 'Resolve a mechanical action via the Judge sub-agent. Determines success/failure, outcome, and consequences for an attempted action.',
+    parameters: {
+        $schema: 'http://json-schema.org/draft-04/schema#',
+        type: 'object',
+        properties: {
+            actor: {
+                type: 'string',
+                description: 'Who is performing the action',
+            },
+            action: {
+                type: 'string',
+                description: 'What action is being attempted',
+            },
+            context: {
+                type: 'object',
+                description: 'Additional context like stats, difficulty, environmental factors',
+            },
+        },
+        required: ['actor', 'action'],
+    },
+
+    /**
+     * Execute the tool - resolves action via orchestrator
+     * @param {Object} params - Tool parameters
+     * @param {string} params.actor - Who is performing the action
+     * @param {string} params.action - What action is being attempted
+     * @param {Object} [params.context] - Additional context
+     * @returns {Promise<Object>} Resolution result with success/failure and consequences
+     */
+    action: async (params) => {
+        logger.info({
+            event: 'tool_invoked',
+            tool: 'resolve_action',
+            actor: params.actor,
+        });
+
+        try {
+            const { resolveAction } = await import('./orchestrator.js');
+            const result = await resolveAction(params);
+
+            logger.info({
+                event: 'tool_completed',
+                tool: 'resolve_action',
+                success: result.success,
+            });
+
+            return result;
+        } catch (error) {
+            logger.error({
+                event: 'tool_error',
+                tool: 'resolve_action',
+                error: error.message,
+            });
+            throw error;
+        }
+    },
+
+    /**
+     * Format message for UI toast display
+     * @param {Object} params - Tool parameters
+     * @returns {string} User-facing message
+     */
+    formatMessage: (params) => {
+        return `Resolving: ${params.actor} attempts to ${params.action}`;
+    },
+
+    /**
+     * Conditional registration check
+     * Only registers if extension is enabled
+     * @returns {boolean} Whether to register this tool
+     */
+    shouldRegister: () => {
+        try {
+            const context = SillyTavern.getContext();
+            return context.extensionSettings?.ensemble?.enabled !== false;
+        } catch {
+            return true;
+        }
+    },
+
+    // Don't hide tool calls from chat history
+    stealth: false,
+};
+
+/**
+ * audit_narrative tool definition
+ *
+ * Guardian audit of a narrative against a mechanical verdict, checking
+ * if the narrative faithfully represents the verdict without contradictions.
+ */
+const auditNarrativeTool = {
+    name: 'audit_narrative',
+    displayName: 'Audit Narrative',
+    description: 'Guardian audit of a narrative against a mechanical verdict. Checks if the narrative faithfully represents the verdict without contradictions or embellishments.',
+    parameters: {
+        $schema: 'http://json-schema.org/draft-04/schema#',
+        type: 'object',
+        properties: {
+            verdict: {
+                type: 'object',
+                description: 'The mechanical verdict to check against (from resolve_action)',
+            },
+            narrative: {
+                type: 'string',
+                description: 'The narrative description to audit for compliance',
+            },
+        },
+        required: ['verdict', 'narrative'],
+    },
+
+    /**
+     * Execute the tool - audits narrative via orchestrator
+     * @param {Object} params - Tool parameters
+     * @param {Object} params.verdict - The mechanical verdict to check against
+     * @param {string} params.narrative - The narrative to audit
+     * @returns {Promise<Object>} Audit result with compliance status
+     */
+    action: async (params) => {
+        logger.info({
+            event: 'tool_invoked',
+            tool: 'audit_narrative',
+        });
+
+        try {
+            const { auditNarrative } = await import('./orchestrator.js');
+            const result = await auditNarrative(params);
+
+            logger.info({
+                event: 'tool_completed',
+                tool: 'audit_narrative',
+                compliant: result.compliant,
+            });
+
+            return result;
+        } catch (error) {
+            logger.error({
+                event: 'tool_error',
+                tool: 'audit_narrative',
+                error: error.message,
+            });
+            throw error;
+        }
+    },
+
+    /**
+     * Format message for UI toast display
+     * @param {Object} params - Tool parameters
+     * @returns {string} User-facing message
+     */
+    formatMessage: (params) => {
+        return `Auditing narrative compliance...`;
+    },
+
+    /**
+     * Conditional registration check
+     * Only registers if extension is enabled
+     * @returns {boolean} Whether to register this tool
+     */
+    shouldRegister: () => {
+        try {
+            const context = SillyTavern.getContext();
+            return context.extensionSettings?.ensemble?.enabled !== false;
+        } catch {
+            return true;
+        }
+    },
+
+    // Don't hide tool calls from chat history
+    stealth: false,
+};
+
+/**
  * All tool definitions for the extension
  * @type {Object[]}
  */
 const TOOL_DEFINITIONS = [
     spawnNPCResponsesTool,
+    queryNPCKnowledgeTool,
+    resolveActionTool,
+    auditNarrativeTool,
 ];
 
 /**

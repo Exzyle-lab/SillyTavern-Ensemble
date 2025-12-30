@@ -63,6 +63,46 @@ const FORMAT_INSTRUCTIONS = Object.freeze({
 });
 
 /**
+ * Attempt lenient JSON parsing for scene state.
+ *
+ * LLMs often produce JSON with minor syntax errors:
+ * - Trailing commas before } and ]
+ * - Single quotes instead of double quotes
+ * - Unquoted keys
+ *
+ * This function tries strict parsing first, then attempts cleanup.
+ *
+ * @param {string} str - JSON string to parse
+ * @returns {Object|null} Parsed object or null on failure
+ */
+function lenientJSONParse(str) {
+    // First try strict parsing
+    try {
+        return JSON.parse(str);
+    } catch (strictError) {
+        // Strict parse failed, attempt cleanup
+    }
+
+    try {
+        let cleaned = str;
+
+        // Remove trailing commas before } and ]
+        // Matches: comma followed by optional whitespace and then } or ]
+        cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
+
+        // Replace single quotes with double quotes around string values
+        // This is a simplified approach - handles 'value' -> "value"
+        // Note: This won't handle strings containing escaped quotes perfectly
+        cleaned = cleaned.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"');
+
+        return JSON.parse(cleaned);
+    } catch (lenientError) {
+        // Both strict and lenient parsing failed
+        return null;
+    }
+}
+
+/**
  * Get all lorebook entries from SillyTavern.
  *
  * Attempts to use window.getSortedEntries() which returns all entries
@@ -281,52 +321,52 @@ export function getSceneState(entries) {
     }
 
     // Parse the JSON content
-    try {
-        const content = sceneEntry.content || '';
+    const content = sceneEntry.content || '';
 
-        // Try to extract JSON from the content
-        // It might be pure JSON or wrapped in markdown code blocks
-        let jsonContent = content.trim();
+    // Try to extract JSON from the content
+    // It might be pure JSON or wrapped in markdown code blocks
+    let jsonContent = content.trim();
 
-        // Remove markdown code block if present
-        const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (codeBlockMatch) {
-            jsonContent = codeBlockMatch[1].trim();
-        }
+    // Remove markdown code block if present
+    const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+        jsonContent = codeBlockMatch[1].trim();
+    }
 
-        const parsed = JSON.parse(jsonContent);
+    const parsed = lenientJSONParse(jsonContent);
 
-        // Merge with defaults to ensure all fields exist
-        const sceneState = {
-            location: parsed.location || DEFAULT_SCENE_STATE.location,
-            time: parsed.time || DEFAULT_SCENE_STATE.time,
-            present_npcs: Array.isArray(parsed.present_npcs)
-                ? parsed.present_npcs
-                : DEFAULT_SCENE_STATE.present_npcs,
-            tension: typeof parsed.tension === 'number'
-                ? parsed.tension
-                : DEFAULT_SCENE_STATE.tension,
-            recent_events: Array.isArray(parsed.recent_events)
-                ? parsed.recent_events
-                : DEFAULT_SCENE_STATE.recent_events,
-        };
-
-        logger.debug({
-            event: 'scene_state_loaded',
-            location: sceneState.location,
-            presentCount: sceneState.present_npcs.length,
-        });
-
-        return sceneState;
-
-    } catch (error) {
+    if (!parsed) {
         logger.warn({
             event: 'scene_state_parse_error',
-            error: error.message,
-            content: sceneEntry.content?.substring(0, 100),
+            error: 'Failed to parse scene state JSON (strict and lenient parsing both failed)',
+            content: content.substring(0, 100),
         });
+        toastr.warning('Scene state corrupted in Lorebook. Using defaults.');
         return { ...DEFAULT_SCENE_STATE };
     }
+
+    // Merge with defaults to ensure all fields exist
+    const sceneState = {
+        location: parsed.location || DEFAULT_SCENE_STATE.location,
+        time: parsed.time || DEFAULT_SCENE_STATE.time,
+        present_npcs: Array.isArray(parsed.present_npcs)
+            ? parsed.present_npcs
+            : DEFAULT_SCENE_STATE.present_npcs,
+        tension: typeof parsed.tension === 'number'
+            ? parsed.tension
+            : DEFAULT_SCENE_STATE.tension,
+        recent_events: Array.isArray(parsed.recent_events)
+            ? parsed.recent_events
+            : DEFAULT_SCENE_STATE.recent_events,
+    };
+
+    logger.debug({
+        event: 'scene_state_loaded',
+        location: sceneState.location,
+        presentCount: sceneState.present_npcs.length,
+    });
+
+    return sceneState;
 }
 
 /**
