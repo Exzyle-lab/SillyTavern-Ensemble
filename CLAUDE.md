@@ -415,6 +415,31 @@ Key implementation details:
 - Tier dropdowns populate from `connectionManager.profiles[]`
 - Phase 1 uses minimal prompts; Phase 2 adds full lorebook context
 
+**Unit Testing (Phase 1 verification):**
+- 174 tests across 5 files: logger (23), router (38), orchestrator (46), settings (35), tools (32)
+- Test infrastructure gitignored (package.json, tests/, node_modules/, coverage/)
+- Run with `npm test` (requires `npm install` first)
+
+### Phase 2 Planning Notes
+
+**Status:** Planned, ready for implementation
+
+**Files to create:**
+- `src/context.js` (~400 LOC) - Lorebook filtering, knowledge hardening, context builder
+- `src/templates/npc.md` - NPC prompt template with placeholders
+
+**Files to modify:**
+- `src/orchestrator.js` - Replace `buildNPCPrompt()` with `buildNPCContext()` + `buildNPCMessages()`
+
+**Key functions in context.js:**
+- `getAllLorebookEntries()` - Access ST lorebook via `window.getSortedEntries()`
+- `filterEntriesForNPC(entries, npcFilename)` - Knowledge hardening filter
+- `getSceneState()` - Read `ensemble_scene_state` lorebook entry
+- `buildNPCContext(characterId, situation)` - Combine character + filtered lorebook + scene
+- `buildNPCMessages(context, format)` - Format for API call
+
+**Plan file:** `C:\Users\jorda\.claude\plans\spicy-puzzling-allen.md`
+
 ## Open Questions
 
 ### Resolved
