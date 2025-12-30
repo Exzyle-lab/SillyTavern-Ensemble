@@ -65,12 +65,11 @@ const FORMAT_INSTRUCTIONS = Object.freeze({
 /**
  * Attempt lenient JSON parsing for scene state.
  *
- * LLMs often produce JSON with minor syntax errors:
- * - Trailing commas before } and ]
- * - Single quotes instead of double quotes
- * - Unquoted keys
+ * LLMs often produce JSON with minor syntax errors like trailing commas.
+ * This function tries strict parsing first, then attempts trailing comma cleanup.
  *
- * This function tries strict parsing first, then attempts cleanup.
+ * Note: Single-quote replacement was removed as it risks corrupting
+ * natural language content containing apostrophes.
  *
  * @param {string} str - JSON string to parse
  * @returns {Object|null} Parsed object or null on failure
@@ -89,11 +88,6 @@ function lenientJSONParse(str) {
         // Remove trailing commas before } and ]
         // Matches: comma followed by optional whitespace and then } or ]
         cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
-
-        // Replace single quotes with double quotes around string values
-        // This is a simplified approach - handles 'value' -> "value"
-        // Note: This won't handle strings containing escaped quotes perfectly
-        cleaned = cleaned.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"');
 
         return JSON.parse(cleaned);
     } catch (lenientError) {

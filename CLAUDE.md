@@ -481,7 +481,7 @@ Files modified:
    - Prioritizes quality over speed
 
 4. **Lenient JSON Parsing** (Peer Review)
-   - `lenientJSONParse()` handles trailing commas, single quotes
+   - `lenientJSONParse()` handles trailing commas only (single-quote handling removed in 3.1)
    - Toast warning on parse failure: "Scene state corrupted in Lorebook. Using defaults."
 
 5. **New Function Tools:**
@@ -497,6 +497,35 @@ Files modified:
 - 382 tests across 8 files (up from 258)
 - New test files: rate-limiter.test.js (39), ui-lock.test.js (24)
 - Updated: router.test.js (+11), context.test.js (+9), orchestrator.test.js (+17), tools.test.js (+25)
+
+### Phase 3.1: Peer Review Fixes
+
+**Completed 2024-12-30**
+
+Gemini 3 Pro Preview conducted a peer review of Phase 3 implementation. After pushback and consensus dialogue:
+
+**Accepted Fixes:**
+1. **Backoff Decay** (`src/rate-limiter.js`)
+   - Added `DECAY_THRESHOLD_MS = 3600000` (1 hour)
+   - `checkRateLimit()` resets `consecutiveErrors` if rate limit expired over 1 hour ago
+   - Prevents indefinite penalty accumulation for returning users
+
+2. **Remove Single-Quote Regex** (`src/context.js`)
+   - Removed `'` → `"` replacement from `lenientJSONParse()`
+   - Risk: Natural language apostrophes (e.g., "don't") would corrupt JSON
+   - Kept only trailing comma cleanup which is safe
+
+3. **UI Validation** (`src/ui-lock.js`)
+   - Added `validateUI()` export to check selectors exist at startup
+   - Called from `index.js` APP_READY handler
+   - Warns if ST UI elements aren't found (selector changes)
+
+**Rejected Concerns:**
+- **Rate limiter "memory leak"**: Map holds <10 entries (~500 bytes). Not a real concern.
+- **Router error masking**: Incorrect analysis - code throws BEFORE `response.json()` on errors
+
+**Deferred to Phase 4:**
+- One-shot JSON examples for Judge/Guardian prompts (token cost trade-off)
 
 ## Open Questions
 

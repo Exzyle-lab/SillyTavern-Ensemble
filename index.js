@@ -7,6 +7,7 @@
 
 import { logger, generateCorrelationId } from './src/logger.js';
 import { registerTools, unregisterTools } from './src/tools.js';
+import { validateUI } from './src/ui-lock.js';
 import {
     getSettings,
     initSettings,
@@ -136,6 +137,9 @@ async function onAppReady() {
 
         // Load settings UI into ST's extension settings panel
         await loadSettingsUI();
+
+        // Validate UI selectors exist (Phase 3.1)
+        validateUI();
 
         // Register function tools if extension is enabled
         const settings = getSettings();

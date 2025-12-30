@@ -13,6 +13,9 @@ const BASE_DELAY_MS = 5000;
 /** Maximum backoff delay in milliseconds (5 minutes) */
 const MAX_DELAY_MS = 300000;
 
+/** Time after which consecutive errors decay/reset (1 hour) */
+const DECAY_THRESHOLD_MS = 3600000;
+
 /**
  * Gets the current state for a profile, creating default if not exists.
  * @param {string} profileName - The profile name to look up
@@ -47,6 +50,14 @@ function calculateBackoff(errorCount) {
 export function checkRateLimit(profileName) {
     const state = getState(profileName);
     const now = Date.now();
+
+    // Backoff decay: if it's been over 1 hour since the rate limit expired,
+    // reset consecutive errors to avoid penalizing users who return later
+    if (state.nextAttemptTime > 0 && now > state.nextAttemptTime + DECAY_THRESHOLD_MS) {
+        state.consecutiveErrors = 0;
+        state.nextAttemptTime = 0;
+        state.isLimited = false;
+    }
 
     if (!state.isLimited) {
         return { isLimited: false, retryIn: null, reason: null };

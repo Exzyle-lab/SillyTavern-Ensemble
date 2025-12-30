@@ -63,6 +63,25 @@ export function isInputLocked() {
 }
 
 /**
+ * Validate that UI elements exist.
+ * Call at startup to detect selector changes.
+ *
+ * @returns {boolean} True if UI elements found
+ */
+export function validateUI() {
+    const $button = $(SEND_BUTTON);
+    const $textarea = $(SEND_TEXTAREA);
+
+    if ($button.length === 0 || $textarea.length === 0) {
+        logger.warn({ event: 'ui_validation_failed', reason: 'selectors_not_found' });
+        return false;
+    }
+
+    logger.debug({ event: 'ui_validation_passed' });
+    return true;
+}
+
+/**
  * Safely execute a function with input locked.
  * Automatically unlocks even if the function throws.
  *
