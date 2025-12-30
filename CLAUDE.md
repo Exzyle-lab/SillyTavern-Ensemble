@@ -59,7 +59,7 @@ Zone 3 (TOON Footer): Knowledge facts, observations log
 ```
 
 In SillyTavern, this maps to:
-- Zone 1 → Character card metadata + NPC Registry entry
+- Zone 1 → Character card metadata + `card.data.extensions.ensemble` overrides
 - Zone 2 → Character card description/personality fields
 - Zone 3 → Lorebook entries with `characterFilter`
 
@@ -67,17 +67,63 @@ In SillyTavern, this maps to:
 
 Updated December 2025 based on Gemini 3 Flash benchmarks.
 
-| Role | Model | Backend | Rationale |
-|------|-------|---------|-----------|
-| GM/Narrator | Claude Opus | Claude Code CLI | Narrative coherence, orchestration, tool calling |
-| Storyteller | Claude Sonnet | Claude Code CLI | Prose quality for scene weaving |
-| Major NPC | Claude Sonnet | Claude Code CLI | Personality depth, alignment safety |
-| Minor NPC | Gemini 3 Flash | Gemini CLI | Speed (3x faster), 78% SWE-bench, disposable |
-| Judge | Gemini 3 Flash (minimal thinking) | Gemini CLI | Fast stateless logic |
-| Archivist | Gemini 3 Flash (minimal thinking) | Gemini CLI | Fast structured output |
-| Guardian | Gemini 3 Flash (low thinking) | Gemini CLI | Quick validation |
+| Tier | Suggested Model | Rationale |
+|------|-----------------|-----------|
+| `orchestrator` | Claude Opus | Narrative coherence, tool calling, response weaving |
+| `major` | Claude Sonnet | Personality depth, alignment safety, recurring NPCs |
+| `standard` | Gemini Flash (medium thinking) | Balanced speed/quality for moderate complexity |
+| `minor` | Gemini Flash (minimal thinking) | Speed (3x faster), disposable NPCs |
+| `utility` | Gemini Flash (minimal thinking) | Judge, Archivist, Guardian sub-agents |
 
-### Why Gemini 3 Flash Dominates Utility Roles
+### Dynamic Tier Inference
+
+Rather than manual assignment, tiers are **inferred dynamically** from existing data:
+
+```javascript
+function inferTier(npcId, context) {
+  const card = getCharacterCard(npcId);
+  const knowledgeEntries = getEntriesForCharacter(npcId).length;
+  const messageCount = getMessagesFromCharacter(npcId).length;
+
+  // User override via character card extension data
+  if (card.data?.extensions?.ensemble?.tier) {
+    return card.data.extensions.ensemble.tier;
+  }
+
+  // Heuristic scoring
+  const complexity = knowledgeEntries * 2 + messageCount + (card.description?.length > 500 ? 3 : 0);
+
+  if (complexity > 10) return 'major';    // Complex backstory, recurring
+  if (complexity > 3) return 'standard';  // Moderate presence
+  return 'minor';                         // Thugs, shopkeepers, one-offs
+}
+```
+
+**Signals used:**
+- Lorebook entry count (knowledge complexity)
+- Character card length (backstory depth)
+- Conversation history (recurring presence)
+- Explicit override via `card.data.extensions.ensemble.tier`
+
+### Backend Configuration
+
+Users select which **SillyTavern API Connection profile** to use for each tier in extension settings:
+
+```javascript
+{
+  "tierProfiles": {
+    "orchestrator": "Claude API",      // User's configured ST profile
+    "major": "Claude API",
+    "standard": "OpenRouter",          // Or any other configured backend
+    "minor": "OpenRouter",
+    "utility": "OpenRouter"
+  }
+}
+```
+
+This leverages ST's existing connection infrastructure—no additional endpoint configuration needed.
+
+### Why Gemini Flash Dominates Utility Roles
 
 - **Outperforms Pro on coding**: 78% SWE-bench vs Pro's 76.2%
 - **3x faster** than 2.5 Pro at 1/4 the cost
@@ -85,11 +131,12 @@ Updated December 2025 based on Gemini 3 Flash benchmarks.
 - **30% fewer tokens** on average than 2.5 Pro
 - **1M context window**, same as Pro
 
-### Rate Limit Considerations (Google AI Pro Subscription)
+### Rate Limit Handling
 
-- ~100 queries/day for Pro-tier models in Gemini app
-- Gemini CLI: "Higher" limits with 5-hour refresh cycle
-- Extension should track usage and gracefully degrade to sequential if limits hit
+- Track usage per backend profile
+- Implement exponential backoff on 429 errors
+- Gracefully degrade to sequential generation if limits exhausted
+- Consider token bucket algorithm for proactive rate management
 
 ## Architecture Layers
 
@@ -101,21 +148,37 @@ Updated December 2025 based on Gemini 3 Flash benchmarks.
                           │
 ┌─────────────────────────▼───────────────────────────────────┐
 │                     ORCHESTRATOR                            │
-│  Parses GM tool calls → Spawns parallel requests → Aggregates│
+│  Parses GM tool calls → Spawns parallel requests            │
+│  Uses Promise.allSettled() for resilience                   │
 └─────────────────────────┬───────────────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────────────┐
 │                   CONTEXT BUILDER                           │
 │  Character card + Filtered lorebook + Scene state → Prompt  │
 │  Knowledge hardening: unaware_of NEVER enters context       │
+│  Scene state filtered per-NPC perspective                   │
 └─────────────────────────┬───────────────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────────────┐
 │                    BACKEND ROUTER                           │
-│  Model tier → Backend selection → Rate limit tracking       │
-│  Claude (Opus/Sonnet) ←→ EasyCLI ←→ Gemini (Flash/Pro)     │
+│  Dynamic tier inference → ST API Connection profile lookup  │
+│  Rate limit tracking per profile                            │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│                   RESPONSE WEAVER                           │
+│  Aggregates NPC responses → GM/Storyteller for narrative    │
+│  Handles partial failures gracefully                        │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Design Principles
+
+1. **Work within ST, not around it**: Use existing UI (thinking tab, timer, error toasts), APIs, and data structures. Complexity lives in the backend, not user-facing.
+2. **Lorebook-native**: All data lives in ST lorebooks. No parallel data structures.
+3. **Extension ecosystem friendly**: Works with memory extensions (Vector Storage, ChromaDB, etc.) that populate lorebooks dynamically.
+4. **Zero-config defaults**: Dynamic tier inference means it "just works" without manual NPC classification.
+5. **Graceful degradation**: Partial failures don't collapse entire turns.
 
 ## File Structure
 
@@ -124,19 +187,21 @@ SillyTavern-Ensemble/
 ├── manifest.json              # Extension metadata
 ├── index.js                   # Extension entry, event hooks
 ├── src/
-│   ├── router.js              # Backend selection, rate limiting
+│   ├── router.js              # Backend selection, tier inference, rate limiting
 │   ├── context.js             # Prompt building, lorebook filtering
-│   ├── orchestrator.js        # Parallel spawning, aggregation
+│   ├── orchestrator.js        # Parallel spawning via Promise.allSettled()
+│   ├── weaver.js              # Response aggregation, narrative assembly
 │   ├── tools.js               # Function tool definitions
-│   ├── registry.js            # NPC registry management
 │   └── templates/
 │       ├── npc.md             # NPC system prompt template
 │       ├── judge.md           # Mechanical resolution template
 │       └── guardian.md        # Audit template
-├── settings.html              # Backend config UI
+├── settings.html              # Tier-to-profile mapping UI
 ├── styles.css                 # Extension styles
 └── README.md                  # User documentation
 ```
+
+Note: No `registry.js`—NPC data lives entirely in lorebooks and character cards.
 
 ## Function Tools
 
@@ -196,32 +261,9 @@ SillyTavern-Ensemble/
 
 ## Data Structures
 
-### NPC Registry
+### Scene State (Lorebook Entry)
 
-Stored in extension settings or as lorebook constant entry:
-
-```javascript
-{
-  "harley_quinn": {
-    "character_id": "abc123",     // ST character card reference
-    "tier": "major",              // major | minor | boss
-    "model_override": null,       // Override default model if needed
-    "knowledge_tags": ["gotham", "joker", "arkham"],
-    "voice_summary": "Playful Brooklyn accent, psychiatric terminology as dark humor"
-  },
-  "thug_1": {
-    "character_id": "def456",
-    "tier": "minor",
-    "model_override": null,
-    "knowledge_tags": ["street"],
-    "voice_summary": "Generic frightened grunt"
-  }
-}
-```
-
-### Scene State
-
-Injected to all participants:
+Stored as a constant lorebook entry with key `ensemble_scene_state`:
 
 ```javascript
 {
@@ -235,6 +277,24 @@ Injected to all participants:
   ]
 }
 ```
+
+**Important**: Scene state is filtered per-NPC perspective. Each NPC receives only events they witnessed or would know about. Use `characterFilter` on `recent_events` lorebook entries for sensitive information.
+
+### NPC Data (No Separate Registry)
+
+NPC information lives in existing ST structures:
+
+| Data | Location |
+|------|----------|
+| Identity, personality, voice | Character card (description, personality fields) |
+| Knowledge, beliefs, memories | Lorebook entries with `characterFilter` |
+| Tier override (optional) | `card.data.extensions.ensemble.tier` |
+| Model override (optional) | `card.data.extensions.ensemble.model` |
+
+This approach:
+- Works with existing character cards without modification
+- Benefits from memory extensions that populate lorebooks dynamically
+- Requires no data migration or parallel structures
 
 ## Knowledge Isolation via Lorebook
 
@@ -280,37 +340,44 @@ function buildNPCContext(npcId, sceneState) {
 
 ### Bypass `generateRaw()`
 
-SillyTavern's `generateRaw()` is async but **queues sequentially** due to shared state mutation. For true parallelism:
+SillyTavern's `generateRaw()` is async but **queues sequentially** due to shared state mutation. For true parallelism, use direct API calls via the selected ST API Connection profile:
 
 ```javascript
 // DON'T: Uses ST's sequential queue
 const responses = await Promise.all(npcs.map(npc => generateRaw(prompt)));
 
-// DO: Direct API calls
-async function directAPICall(prompt, model, backend) {
-  const endpoint = backend === 'claude' 
-    ? '/api/backends/chat-completions/generate'
-    : settings.geminiEndpoint;
-    
-  return fetch(endpoint, {
+// DO: Direct API calls using ST connection profiles
+async function directAPICall(prompt, npcId) {
+  const tier = inferTier(npcId);
+  const profile = getSTConnectionProfile(settings.tierProfiles[tier]);
+
+  return fetch(profile.endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, model })
+    headers: buildHeaders(profile),
+    body: JSON.stringify({ prompt, model: profile.model })
   }).then(r => r.json());
 }
 
-const responses = await Promise.all(
-  npcs.map(npc => directAPICall(buildPrompt(npc), getModel(npc), getBackend(npc)))
+// Use Promise.allSettled for resilience
+const results = await Promise.allSettled(
+  npcs.map(npc => directAPICall(buildPrompt(npc), npc.id))
 );
+
+// Handle partial failures
+const responses = results.map((result, i) => ({
+  npc: npcs[i],
+  success: result.status === 'fulfilled',
+  response: result.status === 'fulfilled' ? result.value : null,
+  error: result.status === 'rejected' ? result.reason : null
+}));
 ```
 
-### EasyCLI Integration
+### Concurrency Lock
 
-User has EasyCLI (GUI fork of CLIProxyAPI) exposing both:
-- Claude Code CLI as OpenAI-compatible endpoint
-- Gemini CLI as OpenAI-compatible endpoint
-
-Extension should allow configuring both endpoints in settings.
+Implement a lock to prevent conflicts while parallel generation runs:
+- Block new user actions during generation
+- Manually manage UI loading states
+- Test for race conditions with other extensions
 
 ### ST Reverse Proxy Behavior
 
@@ -330,15 +397,25 @@ Extension should allow configuring both endpoints in settings.
 
 ## Open Questions
 
-1. **Lorebook API**: Is there `getFilteredWorldInfo(characterId)` or must we iterate entries manually checking `characterFilter`?
+### Resolved
 
-2. **Character Card Access**: Structure of `SillyTavern.getContext().characters[id]`?
+1. ~~**Lorebook API**~~: Assume manual filtering required. Abstract into `context.js` to insulate from ST API changes. Works with memory extensions that populate lorebooks dynamically.
 
-3. **Group Chat Coexistence**: Supplement ST groups or replace entirely?
+2. ~~**Character Card Access**~~: Use ST's existing API. Flag as potentially brittle if undocumented—may need updates when ST changes.
 
-4. **Scene State Persistence**: Lorebook constant entry? Data Bank? Extension storage?
+3. ~~**Group Chat Coexistence**~~: **Supplement**, don't replace. Extension is a "power-up" triggered on demand to inject parallel-generated responses.
 
-5. **GM Tool Awareness**: How does GM know available NPCs? Read registry via tool? User manages list?
+4. ~~**Scene State Persistence**~~: Constant lorebook entry with key `ensemble_scene_state`. User-editable, fits ST paradigm.
+
+5. ~~**GM Tool Awareness**~~: GM prompt dynamically populated with NPC list from scene state. NPCs present in scene derived from lorebook/chat context.
+
+### Remaining
+
+1. **Lorebook Filtering API**: Need to verify exact API for iterating lorebook entries and checking `characterFilter` field. May need to use `getContext().extensionSettings` or similar.
+
+2. **Character Card Extension Data**: Verify `card.data.extensions` is the correct path for storing ensemble-specific overrides (tier, model).
+
+3. **ST API Connection Profile Access**: How to programmatically get endpoint/credentials from a named ST connection profile for direct fetch calls.
 
 ## ST Extension Hooks (Relevant)
 
@@ -369,6 +446,65 @@ When starting work:
 3. `src/router.js` for backend selection logic
 4. `src/context.js` for prompt building
 5. `src/tools.js` for function tool implementations
+
+## UX Considerations
+
+### Triggering Parallel Generation
+
+- Slash command: `/ensemble` or `/spawn` to trigger parallel NPC responses
+- Optional: Button in group chat UI for one-click activation
+
+### Leverage Existing ST UI
+
+| ST Feature | Ensemble Usage |
+|------------|----------------|
+| **Thinking tab** | Stream progress updates ("Spawning 4 NPCs...", "harley_quinn complete") |
+| **Timer (left of output)** | Already tracks generation time—works automatically if we integrate properly |
+| **Error toasts** | Surface actionable errors through ST's existing error handling |
+
+On halt/failure: stop the timer, show error via ST's error UI.
+
+### Actionable Error Messages
+
+```javascript
+// Bad: Generic error
+throw new Error("NPC generation failed");
+
+// Good: Actionable context
+throw new Error(`[Ensemble] Failed to generate ${npcId} (tier: ${tier}): ${profile.name} returned 429. Rate limit exceeded—try again in 5 minutes or switch to a different backend profile.`);
+```
+
+Include: which NPC failed, which backend profile, actual API error, suggested fix.
+
+## Testing Strategy
+
+| Level | Scope | Tools |
+|-------|-------|-------|
+| Unit | Context Builder filtering logic, tier inference | Jest/Vitest |
+| Integration | API pipeline with mocks | MSW (Mock Service Worker) |
+| End-to-end | Full flow with real backends | Manual + screenshots |
+
+### Key Test Cases
+
+1. Knowledge hardening: Verify `unaware_of` entries never appear in NPC context
+2. Tier inference: Validate heuristic produces expected tiers for sample NPCs
+3. Partial failure: Confirm 3/4 successes don't crash, failures reported gracefully
+4. Rate limit: Verify backoff and degradation behavior
+
+## Logging
+
+Implement structured logging with **correlation IDs** to trace requests across parallel sub-agent calls:
+
+```javascript
+const correlationId = generateId();
+logger.info({ correlationId, event: 'spawn_start', npcs: ['harley', 'thug_1'] });
+
+// Each parallel request logs with same correlationId
+logger.info({ correlationId, npc: 'harley', event: 'request_sent', tier: 'major' });
+logger.info({ correlationId, npc: 'harley', event: 'response_received', latency: 2340 });
+```
+
+Essential for debugging parallel execution issues.
 
 ## Commit Style
 
