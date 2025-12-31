@@ -647,3 +647,357 @@ export async function getKnowledgeSummary(characterId) {
         sceneState: getSceneState(allEntries),
     };
 }
+
+// ============================================================================
+// Lorebook Character Parsing (Phase 5.3 - Character Lifecycle System)
+// ============================================================================
+
+/**
+ * @typedef {Object} LorebookCharacter
+ * @property {string} name - Display name of the character
+ * @property {'major'|'standard'|'minor'} tier - Character tier for routing
+ * @property {string|null} template - Optional template hint
+ * @property {string} voice - Voice/speaking style description
+ * @property {string} personality - Personality description
+ * @property {string} background - Background/history
+ * @property {string[]} quirks - Character quirks and mannerisms
+ * @property {string} _entryKey - Original lorebook key for reference
+ * @property {string} _entryUid - Lorebook entry UID
+ */
+
+/**
+ * Prefix used to identify ensemble character entries in lorebook.
+ * @type {string}
+ */
+const CHARACTER_ENTRY_PREFIX = 'ensemble_character:';
+
+/**
+ * Valid tier values for ensemble characters.
+ * @type {Set<string>}
+ */
+const VALID_TIERS = new Set(['major', 'standard', 'minor']);
+
+/**
+ * Parse simple YAML content into an object.
+ *
+ * Handles:
+ * - Key-value pairs: `key: value` or `key: "quoted value"`
+ * - Arrays with `- item` syntax
+ * - Multiline indicator `|` (content on following lines)
+ * - Comments starting with #
+ *
+ * This is a minimal parser for character definitions, not full YAML spec.
+ *
+ * @param {string} content - YAML content to parse
+ * @returns {Object} Parsed object with string and array values
+ */
+function parseSimpleYAML(content) {
+    const result = {};
+    const lines = content.split('\n');
+    let currentKey = null;
+    let inArray = false;
+    let inMultiline = false;
+    let multilineContent = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        // Skip empty lines and comments (unless in multiline mode)
+        if (!trimmed || trimmed.startsWith('#')) {
+            if (inMultiline && currentKey) {
+                // Empty line in multiline - preserve as paragraph break
+                multilineContent.push('');
+            }
+            continue;
+        }
+
+        // Check indentation for context
+        const indent = line.length - line.trimStart().length;
+
+        // Array item: "  - value"
+        if (trimmed.startsWith('- ') && inArray && currentKey) {
+            let value = trimmed.substring(2).trim();
+            // Remove surrounding quotes
+            value = value.replace(/^["']|["']$/g, '');
+            result[currentKey].push(value);
+            continue;
+        }
+
+        // If we were in multiline mode and hit a non-indented line with a colon,
+        // we've moved to a new key
+        if (inMultiline && indent === 0 && trimmed.includes(':')) {
+            // Finalize multiline content
+            result[currentKey] = multilineContent.join('\n').trim();
+            multilineContent = [];
+            inMultiline = false;
+            currentKey = null;
+        }
+
+        // Multiline continuation (indented content after |)
+        if (inMultiline && currentKey && indent > 0) {
+            multilineContent.push(trimmed);
+            continue;
+        }
+
+        // Key-value: "key: value" or "key:" or "key: |"
+        const colonIndex = trimmed.indexOf(':');
+        if (colonIndex > 0) {
+            const key = trimmed.substring(0, colonIndex).trim();
+            let value = trimmed.substring(colonIndex + 1).trim();
+
+            // Remove surrounding quotes from value
+            value = value.replace(/^["']|["']$/g, '');
+
+            if (value === '|') {
+                // Multiline string indicator
+                currentKey = key;
+                inMultiline = true;
+                inArray = false;
+                multilineContent = [];
+            } else if (value === '') {
+                // Empty value - could be array or multiline, check next line
+                currentKey = key;
+                result[key] = [];
+                inArray = true;
+                inMultiline = false;
+            } else {
+                // Simple key-value
+                result[key] = value;
+                currentKey = key;
+                inArray = false;
+                inMultiline = false;
+            }
+        }
+    }
+
+    // Finalize any pending multiline content
+    if (inMultiline && currentKey && multilineContent.length > 0) {
+        result[currentKey] = multilineContent.join('\n').trim();
+    }
+
+    // Convert empty arrays to empty strings for non-array fields
+    // Keep arrays that actually have items
+    for (const [key, value] of Object.entries(result)) {
+        if (Array.isArray(value) && value.length === 0 && key !== 'quirks') {
+            result[key] = '';
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Convert a key segment to title case display name.
+ *
+ * Transforms underscore-separated lowercase to proper title case.
+ * Example: "guard_captain_marcus" -> "Guard Captain Marcus"
+ *
+ * @param {string} keyPart - Key segment after the prefix
+ * @returns {string} Title-cased display name
+ */
+function keyToDisplayName(keyPart) {
+    return keyPart
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+}
+
+/**
+ * Extract the character ID from a lorebook entry key.
+ *
+ * @param {Object} entry - Lorebook entry object
+ * @returns {string|null} Character ID or null if not a character entry
+ */
+function extractCharacterIdFromEntry(entry) {
+    const keys = entry.key || entry.keys || [];
+    const keyArray = Array.isArray(keys) ? keys : [keys];
+
+    for (const key of keyArray) {
+        if (typeof key !== 'string') continue;
+
+        const lowerKey = key.toLowerCase();
+        const prefixIndex = lowerKey.indexOf(CHARACTER_ENTRY_PREFIX.toLowerCase());
+
+        if (prefixIndex !== -1) {
+            // Extract the part after the prefix
+            const afterPrefix = key.substring(prefixIndex + CHARACTER_ENTRY_PREFIX.length);
+            return afterPrefix.trim() || null;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Check if a lorebook entry is an ensemble character definition.
+ *
+ * Character entries have a key containing "ensemble_character:" (case-insensitive).
+ *
+ * @param {Object} entry - Lorebook entry object
+ * @returns {boolean} True if entry is a character definition
+ */
+export function isCharacterEntry(entry) {
+    if (!entry) return false;
+
+    const keys = entry.key || entry.keys || [];
+    const keyArray = Array.isArray(keys) ? keys : [keys];
+
+    return keyArray.some(key =>
+        typeof key === 'string' &&
+        key.toLowerCase().includes(CHARACTER_ENTRY_PREFIX.toLowerCase())
+    );
+}
+
+/**
+ * Parse a lorebook entry as an ensemble character definition.
+ *
+ * Expected lorebook entry format:
+ * - Key: `ensemble_character:marcus` or `ensemble_character:guard_captain_marcus`
+ * - Content: YAML format with name, tier, template, voice, personality, background, quirks
+ *
+ * @param {Object} entry - Lorebook entry object
+ * @returns {LorebookCharacter|null} Parsed character or null if not a character entry
+ */
+export function parseLorebookCharacter(entry) {
+    if (!isCharacterEntry(entry)) {
+        return null;
+    }
+
+    const characterId = extractCharacterIdFromEntry(entry);
+    if (!characterId) {
+        logger.warn({
+            event: 'character_parse_no_id',
+            message: 'Character entry found but could not extract ID',
+            entryUid: entry.uid,
+        });
+        return null;
+    }
+
+    // Parse YAML content
+    const content = entry.content || '';
+    const parsed = parseSimpleYAML(content);
+
+    // Determine name: explicit field or derive from key
+    const name = parsed.name || keyToDisplayName(characterId);
+
+    // Validate and default tier
+    let tier = 'standard';
+    if (parsed.tier && VALID_TIERS.has(parsed.tier.toLowerCase())) {
+        tier = parsed.tier.toLowerCase();
+    }
+
+    // Build character object with defaults
+    const character = {
+        name: name,
+        tier: tier,
+        template: parsed.template || null,
+        voice: parsed.voice || '',
+        personality: parsed.personality || '',
+        background: parsed.background || '',
+        quirks: Array.isArray(parsed.quirks) ? parsed.quirks : [],
+        // Metadata
+        _entryKey: `${CHARACTER_ENTRY_PREFIX}${characterId}`,
+        _entryUid: entry.uid || '',
+    };
+
+    logger.debug({
+        event: 'character_parsed',
+        name: character.name,
+        tier: character.tier,
+        entryKey: character._entryKey,
+    });
+
+    return character;
+}
+
+/**
+ * Get all ensemble characters from lorebook.
+ *
+ * Scans all lorebook entries for character definitions and parses them.
+ * Returns a Map keyed by lowercase name for case-insensitive lookup.
+ *
+ * @returns {Promise<Map<string, LorebookCharacter>>} Map of name.toLowerCase() -> character
+ */
+export async function getAllLorebookCharacters() {
+    const characters = new Map();
+
+    try {
+        const entries = await getAllLorebookEntries();
+
+        for (const entry of entries) {
+            const character = parseLorebookCharacter(entry);
+            if (character) {
+                // Key by lowercase name for case-insensitive lookup
+                const lookupKey = character.name.toLowerCase();
+
+                // Warn on duplicate names
+                if (characters.has(lookupKey)) {
+                    logger.warn({
+                        event: 'character_duplicate',
+                        name: character.name,
+                        existingKey: characters.get(lookupKey)._entryKey,
+                        newKey: character._entryKey,
+                    });
+                }
+
+                characters.set(lookupKey, character);
+            }
+        }
+
+        logger.debug({
+            event: 'characters_loaded',
+            count: characters.size,
+        });
+
+    } catch (error) {
+        logger.error({
+            event: 'characters_load_error',
+            error: error.message,
+        });
+    }
+
+    return characters;
+}
+
+/**
+ * Find a specific lorebook character by name.
+ *
+ * Performs case-insensitive lookup against character names.
+ *
+ * @param {string} name - Character name to find
+ * @returns {Promise<LorebookCharacter|null>} Character or null if not found
+ */
+export async function findLorebookCharacter(name) {
+    if (!name || typeof name !== 'string') {
+        return null;
+    }
+
+    const characters = await getAllLorebookCharacters();
+    const lookupKey = name.toLowerCase().trim();
+
+    // Direct lookup
+    if (characters.has(lookupKey)) {
+        return characters.get(lookupKey);
+    }
+
+    // Try partial match if exact match fails
+    // This handles cases like searching for "Marcus" when entry is "Guard Captain Marcus"
+    for (const [key, character] of characters) {
+        if (key.includes(lookupKey) || lookupKey.includes(key)) {
+            logger.debug({
+                event: 'character_partial_match',
+                searched: name,
+                found: character.name,
+            });
+            return character;
+        }
+    }
+
+    logger.debug({
+        event: 'character_not_found',
+        searched: name,
+    });
+
+    return null;
+}

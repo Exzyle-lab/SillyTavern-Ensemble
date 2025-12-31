@@ -11,6 +11,10 @@ import { validateUI } from './src/ui-lock.js';
 import { registerSlashCommands } from './src/commands.js';
 import { openTierDebugger } from './src/tier-debugger.js';
 import {
+    clearSessionCharacters,
+    loadSessionFromStorage,
+} from './src/character-resolver.js';
+import {
     getSettings,
     initSettings,
     getAvailableProfiles,
@@ -419,6 +423,9 @@ async function onAppReady() {
         // Initialize settings using the settings module
         initSettings();
 
+        // Load session characters from sessionStorage (Phase 5)
+        loadSessionFromStorage();
+
         // Load settings UI into ST's extension settings panel
         await loadSettingsUI();
 
@@ -448,6 +455,18 @@ async function onAppReady() {
 }
 
 /**
+ * Called when chat changes (new chat selected)
+ * Clears session characters to prevent cross-adventure pollution
+ */
+function onChatChanged() {
+    const cleared = clearSessionCharacters();
+    logger.debug({
+        event: 'chat_changed',
+        sessionCharactersCleared: cleared,
+    });
+}
+
+/**
  * Extension initialization function
  */
 export function init() {
@@ -456,6 +475,9 @@ export function init() {
 
     // Hook into APP_READY event
     eventSource.on(event_types.APP_READY, onAppReady);
+
+    // Hook into CHAT_CHANGED event to clear session characters (Phase 5)
+    eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
 
     logger.debug({ event: 'init_registered' });
 }

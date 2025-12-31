@@ -319,6 +319,19 @@
     min-width: 0;
 }
 
+/* Session character subtitle (spawn count) */
+.tier-debugger-subtitle {
+    font-weight: normal;
+    font-size: 0.8em;
+    opacity: 0.7;
+    margin-left: 4px;
+}
+
+/* Session character row styling */
+.tier-debugger-row.session-character {
+    border-left: 3px solid #f39c12;
+}
+
 /* Tier Dropdown */
 .tier-debugger-tier {
     flex-shrink: 0;

@@ -12,7 +12,12 @@
 
 import { logger, generateCorrelationId } from './logger.js';
 import { inferTier, getProfileForTier, directGenerate } from './router.js';
-import { buildNPCPromptWithContext, buildNPCContext } from './context.js';
+import { buildNPCPromptWithContext, buildNPCContext, buildNPCMessages } from './context.js';
+import {
+    resolveCharacter,
+    incrementSpawnCount,
+    addGeneratedResponse,
+} from './character-resolver.js';
 
 /**
  * Module-level AbortController for cancelling pending NPC generation requests.
@@ -46,33 +51,72 @@ export function findCharacterByName(name) {
 }
 
 /**
+ * Build prompt messages for a virtual character (not an ST card).
+ *
+ * Virtual characters include lorebook characters, session characters,
+ * template-generated characters, and stubs.
+ *
+ * @param {Object} resolved - Resolved character object
+ * @param {string} situation - The situation to react to
+ * @param {string} format - Response format
+ * @returns {Array<{role: string, content: string}>} Messages array for API
+ */
+function buildVirtualCharacterMessages(resolved, situation, format) {
+    // Build a simple context from the resolved character
+    const contextData = {
+        npc_name: resolved.name,
+        npc_voice: '',
+        npc_personality: resolved.identity,
+        knowledge: '', // Virtual characters have limited knowledge
+        scene_state: '',
+        situation: situation,
+    };
+
+    return buildNPCMessages(contextData, format);
+}
+
+/**
  * Execute a single NPC generation request.
  *
  * @param {string} npcName - The NPC name
- * @param {number} characterId - The character index
+ * @param {Object} resolved - Resolved character object from character-resolver
  * @param {string} situation - The situation to react to
  * @param {string} format - Response format
  * @param {string} correlationId - Correlation ID for logging
  * @param {AbortSignal} [signal] - Optional AbortSignal for cancellation
  * @returns {Promise<Object>} Result object with response or error
  */
-async function executeNPCRequest(npcName, characterId, situation, format, correlationId, signal) {
+async function executeNPCRequest(npcName, resolved, situation, format, correlationId, signal) {
     const startTime = Date.now();
 
     try {
-        // Infer tier for this character
-        const tier = await inferTier(characterId);
+        // Get tier from resolved character (already inferred)
+        // For ST cards, re-infer for accuracy; for virtual characters, use resolved tier
+        let tier;
+        if (resolved.stCharacterId !== null) {
+            tier = await inferTier(resolved.stCharacterId);
+        } else {
+            tier = resolved.tier;
+        }
         const profile = getProfileForTier(tier);
 
         logger.debug({
             event: 'request_sent',
             npc: npcName,
             tier: tier,
+            source: resolved.source,
             profile: profile?.name || 'current',
         }, correlationId);
 
-        // Build prompt for this NPC with full lorebook context (Phase 2)
-        const messages = await buildNPCPromptWithContext(characterId, situation, format);
+        // Build prompt for this NPC
+        let messages;
+        if (resolved.stCharacterId !== null) {
+            // ST card: Use full lorebook context (Phase 2)
+            messages = await buildNPCPromptWithContext(resolved.stCharacterId, situation, format);
+        } else {
+            // Virtual character: Build simpler prompt from identity
+            messages = buildVirtualCharacterMessages(resolved, situation, format);
+        }
 
         // Make the API call
         const result = await directGenerate(messages, profile, {
@@ -104,13 +148,22 @@ async function executeNPCRequest(npcName, characterId, situation, format, correl
             responseText = JSON.stringify(result);
         }
 
+        const finalResponse = responseText.trim();
+
+        // Track spawn count and response for virtual characters
+        if (resolved.source !== 'card') {
+            incrementSpawnCount(npcName);
+            addGeneratedResponse(npcName, finalResponse);
+        }
+
         return {
             npc: npcName,
             success: true,
-            response: responseText.trim(),
+            response: finalResponse,
             error: null,
             latency: latency,
             tier: tier,
+            source: resolved.source,
         };
 
     } catch (error) {
@@ -276,29 +329,20 @@ export async function spawnNPCResponses({ npcs, situation, format = 'full' }) {
         };
     }
 
-    // Resolve NPC names to character IDs
-    const npcRequests = npcs.map(npcName => {
-        const characterId = findCharacterByName(npcName);
+    // Resolve NPC names using the virtual character layer
+    // resolveCharacter() always returns a character (falls back to template/stub)
+    const npcRequests = npcs.map(async npcName => {
+        const resolved = await resolveCharacter(npcName);
 
-        if (characterId === null) {
-            logger.warn({
-                event: 'character_not_found',
-                npc: npcName,
-            }, correlationId);
+        logger.debug({
+            event: 'character_resolved',
+            npc: npcName,
+            source: resolved.source,
+            tier: resolved.tier,
+        }, correlationId);
 
-            // Return a pre-failed result for missing characters
-            return Promise.resolve({
-                npc: npcName,
-                success: false,
-                response: null,
-                error: `Character "${npcName}" not found`,
-                latency: 0,
-                tier: null,
-            });
-        }
-
-        // Execute the NPC request
-        return executeNPCRequest(npcName, characterId, situation, format, correlationId, signal);
+        // Execute the NPC request with resolved character
+        return executeNPCRequest(npcName, resolved, situation, format, correlationId, signal);
     });
 
     // Execute all requests in parallel

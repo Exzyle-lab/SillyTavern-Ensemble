@@ -6,6 +6,7 @@
  * /ensemble status - Show rate limit status
  * /ensemble clear - Clear rate limit state
  * /ensemble stop - Abort pending requests
+ * /ensemble promote [name] - Promote session character to lorebook/card
  *
  * @module commands
  */
@@ -13,6 +14,12 @@
 import { logger } from './logger.js';
 import { spawnNPCResponses, abortCurrentSpawn, getSceneCharacters } from './orchestrator.js';
 import { clearAllRateLimits, getRateLimitState } from './rate-limiter.js';
+import {
+    getPromotionStatus,
+    getPromotableCharacters,
+    promoteToLorebook,
+    promoteToCard,
+} from './character-promoter.js';
 
 /** Track whether commands have been registered */
 let commandsRegistered = false;
@@ -39,6 +46,8 @@ async function handleEnsembleCommand(namedArgs, unnamedArgs) {
             return handleClear();
         case 'stop':
             return handleStop();
+        case 'promote':
+            return await handlePromote(subArgs);
         default:
             return getHelpText();
     }
@@ -118,6 +127,68 @@ function handleStop() {
 }
 
 /**
+ * /ensemble promote [name]
+ * Promote a session character to lorebook or card.
+ * Without name, shows promotable characters.
+ * @param {string[]} args - Character name as array
+ * @returns {Promise<string>} Result message
+ */
+async function handlePromote(args) {
+    const name = args.join(' ').trim();
+
+    // No name provided: list promotable characters
+    if (!name) {
+        const promotable = getPromotableCharacters();
+        if (promotable.length === 0) {
+            return 'No session characters ready for promotion.\n\nCharacters become promotable after 3+ spawns or 500+ total response characters.';
+        }
+        return `**Characters Ready for Promotion:**\n${promotable.map(n => `- ${n}`).join('\n')}\n\nUse \`/ensemble promote <name>\` to promote.`;
+    }
+
+    // Get promotion status
+    const status = getPromotionStatus(name);
+
+    if (!status) {
+        return `Character "${name}" not found in session. Only session characters can be promoted.`;
+    }
+
+    // Already at max level
+    if (status.currentLevel === 2) {
+        return `${name} is already a full Character Card (max level).`;
+    }
+
+    // Check if meets threshold
+    if (!status.meetsThreshold) {
+        const reqs = status.requirements;
+        let progress = '';
+
+        if (status.currentLevel === 0) {
+            progress = `Spawn count: ${reqs.spawnCount.current}/${reqs.spawnCount.required} | Response length: ${reqs.responseLength.current}/${reqs.responseLength.required}`;
+        } else {
+            progress = `Spawn count: ${reqs.spawnCount.current}/${reqs.spawnCount.required} | Custom knowledge: ${reqs.customKnowledge.current ? 'Yes' : 'No'}`;
+        }
+
+        return `${name} hasn't met promotion threshold yet.\n\n${progress}`;
+    }
+
+    // Attempt promotion
+    logger.info({ event: 'promote_command', name, targetLevel: status.nextLevel });
+
+    let success = false;
+    if (status.nextLevel === 'lorebook') {
+        success = await promoteToLorebook(name);
+    } else if (status.nextLevel === 'card') {
+        success = await promoteToCard(name);
+    }
+
+    if (success) {
+        return `Successfully promoted ${name} to ${status.nextLevel === 'card' ? 'Character Card' : 'Lorebook'}!`;
+    } else {
+        return `Failed to promote ${name}. Check console for details.`;
+    }
+}
+
+/**
  * Help text for /ensemble command
  * @returns {string} Help text
  */
@@ -126,7 +197,8 @@ function getHelpText() {
 /ensemble spawn [npcs...] - Generate NPC responses (defaults to scene characters)
 /ensemble status - Show rate limit status per profile
 /ensemble clear - Clear all rate limit state
-/ensemble stop - Abort pending generation (keeps completed)`;
+/ensemble stop - Abort pending generation (keeps completed)
+/ensemble promote [name] - Promote session character to lorebook/card`;
 }
 
 /**
@@ -189,5 +261,6 @@ export {
     handleStatus,
     handleClear,
     handleStop,
+    handlePromote,
     getHelpText,
 };

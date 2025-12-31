@@ -17,10 +17,11 @@ import {
     getSessionTierOverrides,
     TIERS,
 } from './router.js';
+import { getAllSessionCharacters, updateSessionCharacter } from './character-resolver.js';
 
 /**
  * Get all characters with their current tier assignments
- * @returns {Promise<Array<{id: number, name: string, avatar: string|null, tier: string, source: string}>>}
+ * @returns {Promise<Array<{id: number|string, name: string, avatar: string|null, tier: string, source: string, spawnCount?: number, isSessionCharacter?: boolean}>>}
  */
 export async function getCharacterTiers() {
     const context = SillyTavern.getContext();
@@ -28,6 +29,8 @@ export async function getCharacterTiers() {
     const sessionOverrides = getSessionTierOverrides();
 
     const results = [];
+
+    // First, add ST character cards
     for (let i = 0; i < characters.length; i++) {
         const char = characters[i];
         if (!char?.name) continue;
@@ -47,6 +50,28 @@ export async function getCharacterTiers() {
             avatar: char.avatar || null,
             tier,
             source,
+            isSessionCharacter: false,
+        });
+    }
+
+    // Then, add session characters (from character-resolver)
+    const sessionChars = getAllSessionCharacters();
+    for (const [key, sessionChar] of sessionChars) {
+        // Skip if this session character has the same name as an ST card
+        // (ST cards take priority in display)
+        const existsAsCard = results.some(
+            r => r.name.toLowerCase() === sessionChar.name.toLowerCase()
+        );
+        if (existsAsCard) continue;
+
+        results.push({
+            id: `session:${key}`,
+            name: sessionChar.name,
+            avatar: null, // Session characters don't have avatars
+            tier: sessionChar.tier,
+            source: 'session',
+            spawnCount: sessionChar.spawnCount,
+            isSessionCharacter: true,
         });
     }
 
@@ -98,6 +123,9 @@ export async function saveTierToCard(characterId, tier) {
  * @returns {string} HTML string for the row
  */
 function buildCharacterRow(char) {
+    const isSessionChar = char.isSessionCharacter === true;
+
+    // Session characters use a generic placeholder avatar
     const avatarSrc = char.avatar
         ? `/thumbnail?type=avatar&file=${encodeURIComponent(char.avatar)}`
         : '/img/ai4.png';
@@ -106,14 +134,29 @@ function buildCharacterRow(char) {
         `<option value="${t}" ${t === char.tier ? 'selected' : ''}>${t}</option>`
     ).join('');
 
+    // Build subtitle for session characters (show spawn count)
+    const subtitle = isSessionChar && char.spawnCount > 0
+        ? `<span class="tier-debugger-subtitle">(${char.spawnCount} spawn${char.spawnCount !== 1 ? 's' : ''})</span>`
+        : '';
+
+    // Session characters cannot be saved to card (no card exists)
+    const saveButton = isSessionChar
+        ? ''
+        : `<button class="tier-save-btn menu_button" data-char-id="${char.id}" title="Save to card (permanent)">
+                    <i class="fa-solid fa-save"></i>
+                </button>`;
+
     return `
-        <div class="tier-debugger-row" data-char-id="${char.id}">
+        <div class="tier-debugger-row${isSessionChar ? ' session-character' : ''}" data-char-id="${char.id}" data-is-session="${isSessionChar}">
             <div class="tier-debugger-avatar">
                 <img src="${avatarSrc}" alt="${char.name}" />
             </div>
-            <div class="tier-debugger-name" title="${char.name}">${char.name}</div>
+            <div class="tier-debugger-name" title="${char.name}">
+                ${char.name}
+                ${subtitle}
+            </div>
             <div class="tier-debugger-tier">
-                <select class="tier-select text_pole" data-char-id="${char.id}">
+                <select class="tier-select text_pole" data-char-id="${char.id}" data-is-session="${isSessionChar}">
                     ${tierOptions}
                 </select>
             </div>
@@ -121,9 +164,7 @@ function buildCharacterRow(char) {
                 <span class="tier-source-badge tier-source-${char.source}">${char.source}</span>
             </div>
             <div class="tier-debugger-actions">
-                <button class="tier-save-btn menu_button" data-char-id="${char.id}" title="Save to card (permanent)">
-                    <i class="fa-solid fa-save"></i>
-                </button>
+                ${saveButton}
             </div>
         </div>
     `;
@@ -180,18 +221,31 @@ function bindDrawerEvents() {
 
     // Tier select change - apply session override
     $('.tier-select').on('change', async function () {
-        const charId = parseInt($(this).data('char-id'));
+        const charId = $(this).data('char-id');
         const tier = $(this).val();
+        const isSession = $(this).data('is-session') === true || $(this).data('is-session') === 'true';
 
-        setSessionTierOverride(charId, tier);
+        if (isSession && typeof charId === 'string' && charId.startsWith('session:')) {
+            // This is a session character from character-resolver
+            // Update the session character's tier directly
+            const sessionKey = charId.replace('session:', '');
+            updateSessionCharacter(sessionKey, { tier });
 
-        // Update source badge
-        $(this).closest('.tier-debugger-row').find('.tier-source-badge')
-            .removeClass('tier-source-inferred tier-source-card')
-            .addClass('tier-source-session')
-            .text('session');
+            // Source badge stays as 'session' (already is)
+            toastr.info('Session character tier updated');
+        } else {
+            // This is an ST character card - use session override
+            const numericId = parseInt(charId);
+            setSessionTierOverride(numericId, tier);
 
-        toastr.info('Tier override applied (session only)');
+            // Update source badge
+            $(this).closest('.tier-debugger-row').find('.tier-source-badge')
+                .removeClass('tier-source-inferred tier-source-card')
+                .addClass('tier-source-session')
+                .text('session');
+
+            toastr.info('Tier override applied (session only)');
+        }
     });
 
     // Save button - write to card
