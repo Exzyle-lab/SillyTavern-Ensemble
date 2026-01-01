@@ -18,3 +18,4 @@ node_modules/
 coverage/
 .vitest/
 .aim/memory.jsonl
+SillyTavern Ensemble.code-workspace
